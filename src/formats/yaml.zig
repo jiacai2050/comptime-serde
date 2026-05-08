@@ -161,9 +161,16 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
 
 fn writeStringValue(writer: *std.Io.Writer, string: []const u8, indent: usize) !void {
     if (std.mem.indexOfScalar(u8, string, '\n')) |_| {
-        try writer.writeAll(" |\n");
+        // Use |- (strip) to indicate no trailing newline is added by parser.
+        try writer.writeAll(" |-\n");
         var lines = std.mem.splitScalar(u8, string, '\n');
+        // Skip only the final empty segment produced by splitScalar when
+        // the string does NOT end with '\n'. When it does end with '\n',
+        // the split produces an extra "" that we must still write as an
+        // empty indented line to preserve the trailing newline content.
+        const has_trailing_newline = string[string.len - 1] == '\n';
         while (lines.next()) |line| {
+            if (!has_trailing_newline and line.len == 0 and lines.peek() == null) break;
             try writeIndent(writer, indent + 2);
             try writer.writeAll(line);
             try writer.writeByte('\n');
@@ -411,7 +418,7 @@ fn parseFieldValue(
                 var result: T = undefined;
                 const len = @min(src.len, array_info.len);
                 @memcpy(result[0..len], src[0..len]);
-                if (len < array_info.len) result[len] = 0;
+                @memset(result[len..], 0);
                 return result;
             }
             @compileError("unsupported array type: " ++ @typeName(T));
@@ -464,7 +471,7 @@ fn parseStringValue(
     inline_value: []const u8,
 ) ![]const u8 {
     // Literal block scalar.
-    if (std.mem.eql(u8, inline_value, "|")) {
+    if (std.mem.eql(u8, inline_value, "|") or std.mem.eql(u8, inline_value, "|-")) {
         return try parseLiteralBlock(allocator, all_lines, pos, parent_indent);
     }
     if (inline_value.len >= 2 and inline_value[0] == '"' and
@@ -882,7 +889,7 @@ test "serialize multi-line string" {
     var writer = std.Io.Writer.fixed(&buf);
     try serde.serialize(&writer, Doc{ .content = "line1\nline2\nline3" });
     try std.testing.expectEqualStrings(
-        \\content: |
+        \\content: |-
         \\  line1
         \\  line2
         \\  line3
@@ -1016,7 +1023,7 @@ test "deserialize literal block scalar" {
     const Doc = struct { content: []const u8 };
     const serde = Serde(Doc);
     var result = try serde.deserialize(std.testing.allocator,
-        \\content: |
+        \\content: |-
         \\  line1
         \\  line2
         \\  line3
@@ -1125,6 +1132,21 @@ test "roundtrip: multi-line string" {
     const Doc = struct { content: []const u8 };
     const serde = Serde(Doc);
     const original = Doc{ .content = "line1\nline2\nline3" };
+
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqualStrings(original.content, restored.value.content);
+}
+
+test "roundtrip: string ending with newline" {
+    const Doc = struct { content: []const u8 };
+    const serde = Serde(Doc);
+    const original = Doc{ .content = "hello\nworld\n" };
 
     var buf: [512]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);

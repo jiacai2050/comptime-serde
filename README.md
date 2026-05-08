@@ -35,21 +35,32 @@ try toml.serialize(&toml_writer, User{ .name = "alice", .age = 30, .active = tru
 // name = "alice"
 // age = 30
 // active = true
+
+// YAML
+const yaml = serde.Serde(.yaml, User);
+var yaml_buf: [512]u8 = undefined;
+var yaml_writer = std.Io.Writer.fixed(&yaml_buf);
+try yaml.serialize(&yaml_writer, User{ .name = "alice", .age = 30, .active = true });
+// yaml_buf contains:
+// name: alice
+// age: 30
+// active: true
 ```
 
 ## Supported types
 
-| Type | JSON | TOML |
-|------|------|------|
-| `bool` | `true` / `false` | `true` / `false` |
-| Integers | `42` | `42` |
-| Floats | `3.14` | `3.14` |
-| `[]const u8` | `"hello"` | `"hello"` |
-| `[N]u8` | `"hello"` | `"hello"` |
-| `[]T` / `[N]T` | `[1,2,3]` | `[1, 2, 3]` |
-| `?T` | value or `null` | value or `""` |
-| `struct` | `{"key":value}` | `[table]` sections |
-| `[]const Struct` | N/A | `[[array]]` sections |
+| Type | JSON | TOML | YAML |
+|------|------|------|------|
+| `bool` | `true` / `false` | `true` / `false` | `true` / `false` |
+| Integers | `42` | `42` | `42` |
+| Floats | `3.14` | `3.14` | `3.14` |
+| `[]const u8` | `"hello"` | `"hello"` | `hello` |
+| `[N]u8` | `"hello"` | `"hello"` | `hello` |
+| `[]T` / `[N]T` | `[1,2,3]` | `[1, 2, 3]` | `- 1`<br>`- 2` |
+| `?T` | value or `null` | value or `""` | value or `null` |
+| `struct` | `{"key":value}` | `[table]` sections | indented mapping |
+| `[]const Struct` | `[{...}]` | `[[array]]` sections | `- key: val` |
+| Multi-line `[]const u8` | `"a\nb"` | `"""\na\nb"""` | `\|-` block scalar |
 
 Struct fields with default values are optional during deserialization.
 
@@ -61,7 +72,7 @@ Add to your `build.zig.zon`:
 # Latest version
 zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git
 # Tagged version
-zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git#v0.5.0
+zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git#v0.1.0
 ```
 
 Then in `build.zig`:

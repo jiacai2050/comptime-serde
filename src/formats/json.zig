@@ -142,7 +142,7 @@ pub fn Serde(comptime T: type) type {
                         var result: T = undefined;
                         const len = @min(src.len, array_info.len);
                         @memcpy(result[0..len], src[0..len]);
-                        if (len < array_info.len) result[len] = 0;
+                        @memset(result[len..], 0);
                         return result;
                     } else {
                         if (try scanner.next() != .array_begin) return error.UnexpectedToken;
@@ -544,4 +544,21 @@ test "error: object expected but got array" {
         \\{"inner":[1,2]}
     );
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "roundtrip: fixed-size u8 array" {
+    const Data = struct { name: [8]u8 };
+    const serde = Serde(Data);
+    var original: Data = undefined;
+    @memcpy(original.name[0..2], "hi");
+    @memset(original.name[2..], 0);
+
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqualSlices(u8, &original.name, &restored.value.name);
 }

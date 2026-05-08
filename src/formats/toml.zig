@@ -138,11 +138,28 @@ fn writeValue(writer: *std.Io.Writer, value: anytype) !void {
 fn writeString(writer: *std.Io.Writer, string: []const u8) !void {
     if (std.mem.indexOfScalar(u8, string, '\n')) |_| {
         try writer.writeAll("\"\"\"\n");
+        var consecutive_quotes: u32 = 0;
         for (string) |char| {
             switch (char) {
-                '\\' => try writer.writeAll("\\\\"),
-                '\r' => try writer.writeAll("\\r"),
+                '\\' => {
+                    try writer.writeAll("\\\\");
+                    consecutive_quotes = 0;
+                },
+                '\r' => {
+                    try writer.writeAll("\\r");
+                    consecutive_quotes = 0;
+                },
+                '"' => {
+                    consecutive_quotes += 1;
+                    if (consecutive_quotes >= 3) {
+                        try writer.writeAll("\\\"");
+                        consecutive_quotes = 0;
+                    } else {
+                        try writer.writeByte('"');
+                    }
+                },
                 else => {
+                    consecutive_quotes = 0;
                     if (char < 0x20 and char != '\n') {
                         try writer.print("\\u{x:0>4}", .{char});
                     } else {
@@ -372,6 +389,30 @@ fn appendUnescaped(
                 '"' => {
                     try result.append(allocator, '"');
                     i += 2;
+                },
+                'u' => {
+                    if (i + 5 < input.len) {
+                        const code = std.fmt.parseInt(u21, input[i + 2 .. i + 6], 16) catch {
+                            try result.append(allocator, input[i]);
+                            i += 1;
+                            continue;
+                        };
+                        if (code < 0x80) {
+                            try result.append(allocator, @intCast(code));
+                        } else {
+                            var buf: [4]u8 = undefined;
+                            const utf8_len = std.unicode.utf8Encode(code, &buf) catch {
+                                try result.append(allocator, input[i]);
+                                i += 1;
+                                continue;
+                            };
+                            try result.appendSlice(allocator, buf[0..utf8_len]);
+                        }
+                        i += 6;
+                    } else {
+                        try result.append(allocator, input[i]);
+                        i += 1;
+                    }
                 },
                 else => {
                     try result.append(allocator, input[i]);
@@ -611,7 +652,7 @@ fn parseTomlValue(
                 var result: T = undefined;
                 const len = @min(src.len, array_info.len);
                 @memcpy(result[0..len], src[0..len]);
-                if (len < array_info.len) result[len] = 0;
+                @memset(result[len..], 0);
                 return result;
             }
             @compileError("unsupported array type: " ++ @typeName(T));
@@ -641,10 +682,35 @@ fn parseInlineArray(
     var list = std.ArrayList(Item).empty;
     errdefer list.deinit(allocator);
 
-    var parts = std.mem.splitScalar(u8, inner, ',');
-    while (parts.next()) |part| {
-        const element = std.mem.trim(u8, part, " ");
-        try list.append(allocator, try parseTomlPrimitive(Item, allocator, element));
+    var i: usize = 0;
+    while (i < inner.len) {
+        // Skip leading whitespace.
+        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
+        if (i >= inner.len) break;
+
+        // Find end of element, respecting quoted strings.
+        const start = i;
+        if (inner[i] == '"') {
+            i += 1;
+            while (i < inner.len) : (i += 1) {
+                if (inner[i] == '\\' and i + 1 < inner.len) {
+                    i += 1;
+                } else if (inner[i] == '"') {
+                    i += 1;
+                    break;
+                }
+            }
+        } else {
+            while (i < inner.len and inner[i] != ',') : (i += 1) {}
+        }
+        const end = i;
+
+        // Skip comma.
+        if (i < inner.len and inner[i] == ',') i += 1;
+
+        const element = std.mem.trim(u8, inner[start..end], " ");
+        const parsed = try parseTomlPrimitive(Item, allocator, element);
+        try list.append(allocator, parsed);
     }
     return try list.toOwnedSlice(allocator);
 }
@@ -979,6 +1045,70 @@ test "roundtrip: multi-line string" {
     defer restored.deinit();
 
     try std.testing.expectEqualStrings(original.content, restored.value.content);
+}
+
+test "roundtrip: string array with commas" {
+    const Config = struct { tags: []const []const u8 };
+    const serde = Serde(Config);
+    const original = Config{ .tags = &.{ "hello, world", "foo" } };
+
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), restored.value.tags.len);
+    try std.testing.expectEqualStrings("hello, world", restored.value.tags[0]);
+    try std.testing.expectEqualStrings("foo", restored.value.tags[1]);
+}
+
+test "roundtrip: multi-line string with triple quotes" {
+    const Doc = struct { content: []const u8 };
+    const serde = Serde(Doc);
+    const original = Doc{ .content = "has \"\"\" triple\nquotes" };
+
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqualStrings(original.content, restored.value.content);
+}
+
+test "roundtrip: string with control character" {
+    const Doc = struct { content: []const u8 };
+    const serde = Serde(Doc);
+    const original = Doc{ .content = "has\x01ctrl\nchar" };
+
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqualStrings(original.content, restored.value.content);
+}
+
+test "roundtrip: fixed-size u8 array" {
+    const Data = struct { name: [8]u8 };
+    const serde = Serde(Data);
+    var original: Data = undefined;
+    @memcpy(original.name[0..2], "hi");
+    @memset(original.name[2..], 0);
+
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqualSlices(u8, &original.name, &restored.value.name);
 }
 
 // ==================== Error Case Tests ====================
