@@ -21,8 +21,9 @@ Individual test files cannot be run separately — `zig build test` compiles fro
 
 ## Architecture
 
-- `src/root.zig` — Public API entry point. `Serde(format, T)` dispatches to the format-specific implementation. `Parsed` is re-exported from the format module.
-- `src/formats/json.zig` — Complete JSON format implementation. Contains `Serde(T)` which returns a comptime-generated struct with `serialize`/`deserialize` methods, `Parsed(T)` wrapper with arena-backed `deinit()`, and all tests.
+- `src/root.zig` — Public API entry point. `Serde(format, T)` dispatches to the format-specific implementation. `Parsed` is re-exported from the JSON module.
+- `src/formats/json.zig` — JSON format. `Serde(T)` returns a comptime-generated struct with `serialize`/`deserialize` methods, `Parsed(T)` wrapper with arena-backed `deinit()`.
+- `src/formats/toml.zig` — TOML format. Same `Serde(T)` / `Parsed(T)` interface. Supports `[table]` and `[[array]]` sections. Deserialization uses a two-phase approach: KV lines first, then section headers.
 
 Adding a new format: add it to the `Format` enum in root.zig, create `src/formats/<name>.zig` with the same `Serde(T)` / `Parsed(T)` interface, and wire the dispatch in root.zig's `Serde()`.
 

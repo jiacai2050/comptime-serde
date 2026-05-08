@@ -1,13 +1,15 @@
 const std = @import("std");
 const json = @import("formats/json.zig");
+pub const toml = @import("formats/toml.zig");
 
 /// Supported serialization formats.
-pub const Format = enum { json };
+pub const Format = enum { json, toml };
 
 /// Returns a comptime-generated type with serialize/deserialize methods for `T` in the given `format`.
 pub fn Serde(format: Format, comptime T: type) type {
     return switch (format) {
         .json => json.Serde(T),
+        .toml => toml.Serde(T),
     };
 }
 

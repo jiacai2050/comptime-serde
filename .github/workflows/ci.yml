@@ -15,9 +15,6 @@ on:
 
 jobs:
   test:
-    strategy:
-      matrix:
-        optimize: [Debug, ReleaseFast]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

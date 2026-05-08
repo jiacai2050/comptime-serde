@@ -15,31 +15,41 @@ const User = struct {
     active: bool,
 };
 
-// Serialize
-const S = serde.Serde(.json, User);
-var buf: [512]u8 = undefined;
-var writer = std.Io.Writer.fixed(&buf);
-try S.serialize(&writer, User{ .name = "alice", .age = 30, .active = true });
-// buf contains: {"name":"alice","age":30,"active":true}
+// JSON
+const json = serde.Serde(.json, User);
+var json_buf: [512]u8 = undefined;
+var json_writer = std.Io.Writer.fixed(&json_buf);
+try json.serialize(&json_writer, User{ .name = "alice", .age = 30, .active = true });
+// json_buf contains: {"name":"alice","age":30,"active":true}
 
-// Deserialize
-var result = try S.deserialize(allocator, "{\"name\":\"alice\",\"age\":30,\"active\":true}");
-defer result.deinit();
-// result.value is a User
+var json_result = try json.deserialize(allocator, "{\"name\":\"alice\",\"age\":30,\"active\":true}");
+defer json_result.deinit();
+// json_result.value is a User
+
+// TOML
+const toml = serde.Serde(.toml, User);
+var toml_buf: [512]u8 = undefined;
+var toml_writer = std.Io.Writer.fixed(&toml_buf);
+try toml.serialize(&toml_writer, User{ .name = "alice", .age = 30, .active = true });
+// toml_buf contains:
+// name = "alice"
+// age = 30
+// active = true
 ```
 
 ## Supported types
 
-| Type | JSON |
-|------|------|
-| `bool` | `true` / `false` |
-| Integers | `42` |
-| Floats | `3.14` |
-| `[]const u8` | `"hello"` |
-| `[N]u8` | `"hello"` |
-| `[]T` / `[N]T` | `[1,2,3]` |
-| `?T` | value or `null` |
-| `struct` | `{"key":value}` |
+| Type | JSON | TOML |
+|------|------|------|
+| `bool` | `true` / `false` | `true` / `false` |
+| Integers | `42` | `42` |
+| Floats | `3.14` | `3.14` |
+| `[]const u8` | `"hello"` | `"hello"` |
+| `[N]u8` | `"hello"` | `"hello"` |
+| `[]T` / `[N]T` | `[1,2,3]` | `[1, 2, 3]` |
+| `?T` | value or `null` | value or `""` |
+| `struct` | `{"key":value}` | `[table]` sections |
+| `[]const Struct` | N/A | `[[array]]` sections |
 
 Struct fields with default values are optional during deserialization.
 
