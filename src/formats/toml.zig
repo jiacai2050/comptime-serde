@@ -1,4 +1,6 @@
 const std = @import("std");
+const common = @import("common.zig");
+const Parsed = common.Parsed;
 
 /// Returns a comptime-generated TOML serializer/deserializer for type `T`.
 pub fn Serde(comptime T: type) type {
@@ -8,7 +10,8 @@ pub fn Serde(comptime T: type) type {
             try writeTable(writer, value);
         }
 
-        /// Parses `input` as TOML into a `Parsed(T)` that owns all allocated memory; caller must call `deinit()`.
+        /// Parses `input` as TOML into a `Parsed(T)` that owns all allocated memory.
+        /// Caller must call `deinit()`.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
@@ -132,9 +135,27 @@ fn writeValue(writer: *std.Io.Writer, value: anytype) !void {
     }
 }
 
-fn writeString(writer: *std.Io.Writer, s: []const u8) !void {
+fn writeString(writer: *std.Io.Writer, string: []const u8) !void {
+    if (std.mem.indexOfScalar(u8, string, '\n')) |_| {
+        try writer.writeAll("\"\"\"\n");
+        for (string) |char| {
+            switch (char) {
+                '\\' => try writer.writeAll("\\\\"),
+                '\r' => try writer.writeAll("\\r"),
+                else => {
+                    if (char < 0x20 and char != '\n') {
+                        try writer.print("\\u{x:0>4}", .{char});
+                    } else {
+                        try writer.writeByte(char);
+                    }
+                },
+            }
+        }
+        try writer.writeAll("\"\"\"");
+        return;
+    }
     try writer.writeByte('"');
-    for (s) |char| {
+    for (string) |char| {
         switch (char) {
             '"' => try writer.writeAll("\\\""),
             '\\' => try writer.writeAll("\\\\"),
@@ -200,12 +221,27 @@ fn parseStructFull(
                         // Top level: dispatch [[array]].
                         const array_name = extractBracketedName(trimmed, 2, trimmed.len - 2);
                         line_ptr.* = lines.next();
-                        try dispatchTableArray(T, &result, &fields_seen, allocator, lines, line_ptr, array_name);
+                        try dispatchTableArray(
+                            T,
+                            &result,
+                            &fields_seen,
+                            allocator,
+                            lines,
+                            line_ptr,
+                            array_name,
+                        );
                     } else {
-                        // [table] header.
                         const table_name = extractBracketedName(trimmed, 1, trimmed.len - 1);
                         line_ptr.* = lines.next();
-                        try dispatchTable(T, &result, &fields_seen, allocator, lines, line_ptr, table_name);
+                        try dispatchTable(
+                            T,
+                            &result,
+                            &fields_seen,
+                            allocator,
+                            lines,
+                            line_ptr,
+                            table_name,
+                        );
                     }
                     continue;
                 }
@@ -217,7 +253,8 @@ fn parseStructFull(
             inline for (struct_info.fields, 0..) |field, index| {
                 if (!fields_seen[index]) {
                     if (field.default_value_ptr) |default_ptr| {
-                        @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_ptr))).*;
+                        const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
+                        @field(result, field.name) = ptr.*;
                     } else {
                         return error.MissingField;
                     }
@@ -248,17 +285,144 @@ fn parseKvLines(
             return;
         }
 
-        const eq_pos = std.mem.indexOfScalar(u8, trimmed, '=');
-        if (eq_pos == null) {
+        const eq_index = std.mem.indexOfScalar(u8, trimmed, '=') orelse {
             line_ptr.* = lines.next();
             continue;
-        }
-        const eq_index = eq_pos.?;
+        };
         const key = std.mem.trim(u8, trimmed[0..eq_index], " ");
         const raw_value = std.mem.trim(u8, trimmed[eq_index + 1 ..], " ");
 
-        try parseKvLine(T, result, fields_seen, allocator, key, raw_value);
-        line_ptr.* = lines.next();
+        if (std.mem.startsWith(u8, raw_value, "\"\"\"")) {
+            const multi_line_value = try collectMultiLineString(
+                raw_value,
+                lines,
+                line_ptr,
+                allocator,
+            );
+            try parseKvLineWithString(T, result, fields_seen, key, multi_line_value);
+        } else {
+            try parseKvLine(T, result, fields_seen, allocator, key, raw_value);
+            line_ptr.* = lines.next();
+        }
+    }
+}
+
+fn collectMultiLineString(
+    raw_value: []const u8,
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    line_ptr: *?[]const u8,
+    allocator: std.mem.Allocator,
+) ![]const u8 {
+    var result = std.ArrayList(u8).empty;
+    defer result.deinit(allocator);
+
+    // Content after opening """: per TOML spec, a newline immediately after """ is trimmed.
+    const after_open = raw_value[3..];
+    if (after_open.len > 0) {
+        // Check if closing """ is on the same line.
+        if (std.mem.indexOf(u8, after_open, "\"\"\"")) |close_pos| {
+            try appendUnescaped(&result, allocator, after_open[0..close_pos]);
+            line_ptr.* = lines.next();
+            return try result.toOwnedSlice(allocator);
+        }
+        // Non-empty content on opening line (after trimming leading newline per spec, we skip it).
+    }
+
+    // Read subsequent lines until closing """.
+    while (lines.next()) |next_line| {
+        const line = stripTrailingCr(next_line);
+        if (std.mem.indexOf(u8, line, "\"\"\"")) |close_pos| {
+            if (result.items.len > 0) try result.append(allocator, '\n');
+            try appendUnescaped(&result, allocator, line[0..close_pos]);
+            line_ptr.* = lines.next();
+            return try result.toOwnedSlice(allocator);
+        }
+        if (result.items.len > 0) try result.append(allocator, '\n');
+        try appendUnescaped(&result, allocator, line);
+    }
+    line_ptr.* = null;
+    return error.UnexpectedToken;
+}
+
+fn appendUnescaped(
+    result: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    input: []const u8,
+) !void {
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '\\' and i + 1 < input.len) {
+            switch (input[i + 1]) {
+                '\\' => {
+                    try result.append(allocator, '\\');
+                    i += 2;
+                },
+                'n' => {
+                    try result.append(allocator, '\n');
+                    i += 2;
+                },
+                'r' => {
+                    try result.append(allocator, '\r');
+                    i += 2;
+                },
+                't' => {
+                    try result.append(allocator, '\t');
+                    i += 2;
+                },
+                '"' => {
+                    try result.append(allocator, '"');
+                    i += 2;
+                },
+                else => {
+                    try result.append(allocator, input[i]);
+                    i += 1;
+                },
+            }
+        } else {
+            try result.append(allocator, input[i]);
+            i += 1;
+        }
+    }
+}
+
+fn stripTrailingCr(line: []const u8) []const u8 {
+    if (line.len > 0 and line[line.len - 1] == '\r') {
+        return line[0 .. line.len - 1];
+    }
+    return line;
+}
+
+fn parseKvLineWithString(
+    comptime T: type,
+    result: *T,
+    fields_seen: *[std.meta.fields(T).len]bool,
+    key: []const u8,
+    value: []const u8,
+) !void {
+    const struct_info = @typeInfo(T).@"struct";
+    inline for (struct_info.fields, 0..) |field, index| {
+        if (std.mem.eql(u8, field.name, key)) {
+            if (fields_seen[index]) return error.DuplicateField;
+            const field_info = @typeInfo(field.type);
+            const is_string_slice = field_info == .pointer and
+                field_info.pointer.size == .slice and
+                field_info.pointer.child == u8;
+            if (is_string_slice) {
+                @field(result, field.name) = value;
+                fields_seen[index] = true;
+                return;
+            } else if (field_info == .optional) {
+                const child_info = @typeInfo(field_info.optional.child);
+                const is_optional_string = child_info == .pointer and
+                    child_info.pointer.size == .slice and
+                    child_info.pointer.child == u8;
+                if (is_optional_string) {
+                    @field(result, field.name) = value;
+                    fields_seen[index] = true;
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -282,7 +446,14 @@ fn dispatchTable(
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
             if (field_info == .@"struct") {
-                @field(result, field.name) = try parseStructFull(field.type, allocator, lines, line_ptr, false);
+                const parsed = try parseStructFull(
+                    field.type,
+                    allocator,
+                    lines,
+                    line_ptr,
+                    false,
+                );
+                @field(result, field.name) = parsed;
                 fields_seen[index] = true;
                 return;
             }
@@ -391,12 +562,14 @@ fn parseKvLine(
                 .@"struct" => {},
                 .pointer => |pointer_info| {
                     if (pointer_info.size == .slice) {
-                        @field(result, field.name) = try parseTomlValue(field.type, allocator, raw_value);
+                        const parsed = try parseTomlValue(field.type, allocator, raw_value);
+                        @field(result, field.name) = parsed;
                         fields_seen[index] = true;
                     }
                 },
                 else => {
-                    @field(result, field.name) = try parseTomlValue(field.type, allocator, raw_value);
+                    const parsed = try parseTomlValue(field.type, allocator, raw_value);
+                    @field(result, field.name) = parsed;
                     fields_seen[index] = true;
                 },
             }
@@ -500,23 +673,9 @@ fn scanString(allocator: std.mem.Allocator, raw_value: []const u8) ![]const u8 {
     var scanner = std.json.Scanner.initCompleteInput(allocator, raw_value);
     defer scanner.deinit();
     return switch (try scanner.nextAlloc(allocator, .alloc_always)) {
-        .string => |s| s,
-        .allocated_string => |s| s,
+        .string => |str| str,
+        .allocated_string => |str| str,
         else => error.UnexpectedToken,
-    };
-}
-
-// ==================== Parsed ====================
-
-pub fn Parsed(comptime T: type) type {
-    return struct {
-        arena: std.heap.ArenaAllocator,
-        value: T,
-
-        /// Frees all memory allocated during deserialization.
-        pub fn deinit(self: *@This()) void {
-            self.arena.deinit();
-        }
     };
 }
 
@@ -777,4 +936,115 @@ test "roundtrip: table array" {
     try std.testing.expectEqual(@as(u16, 80), restored.value.servers[0].port);
     try std.testing.expectEqualStrings("b.com", restored.value.servers[1].host);
     try std.testing.expectEqual(@as(u16, 443), restored.value.servers[1].port);
+}
+
+test "serialize multi-line string" {
+    const Doc = struct { content: []const u8 };
+    const serde = Serde(Doc);
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, Doc{ .content = "line1\nline2\nline3" });
+    try std.testing.expectEqualStrings(
+        \\content = """
+        \\line1
+        \\line2
+        \\line3"""
+        \\
+    , writer.buffered());
+}
+
+test "deserialize multi-line string" {
+    const Doc = struct { content: []const u8 };
+    const serde = Serde(Doc);
+    var result = try serde.deserialize(std.testing.allocator,
+        \\content = """
+        \\line1
+        \\line2
+        \\line3"""
+    );
+    defer result.deinit();
+    try std.testing.expectEqualStrings("line1\nline2\nline3", result.value.content);
+}
+
+test "roundtrip: multi-line string" {
+    const Doc = struct { content: []const u8 };
+    const serde = Serde(Doc);
+    const original = Doc{ .content = "line1\nline2\nline3" };
+
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqualStrings(original.content, restored.value.content);
+}
+
+// ==================== Error Case Tests ====================
+
+test "error: missing required field" {
+    const Config = struct { host: []const u8, port: u16 };
+    const serde = Serde(Config);
+    const result = serde.deserialize(std.testing.allocator, "host = \"localhost\"\n");
+    try std.testing.expectError(error.MissingField, result);
+}
+
+test "error: duplicate field" {
+    const Config = struct { host: []const u8 };
+    const serde = Serde(Config);
+    const result = serde.deserialize(std.testing.allocator,
+        \\host = "a"
+        \\host = "b"
+    );
+    try std.testing.expectError(error.DuplicateField, result);
+}
+
+test "error: type mismatch string for int" {
+    const Data = struct { count: u32 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator, "count = \"hello\"\n");
+    try std.testing.expect(std.meta.isError(result));
+}
+
+test "error: type mismatch string for bool" {
+    const Data = struct { flag: bool };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator, "flag = \"yes\"\n");
+    try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "error: invalid integer" {
+    const Data = struct { count: u32 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator, "count = abc\n");
+    try std.testing.expect(std.meta.isError(result));
+}
+
+test "error: empty input missing fields" {
+    const Data = struct { name: []const u8 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator, "");
+    try std.testing.expectError(error.MissingField, result);
+}
+
+test "error: unclosed multi-line string" {
+    const Doc = struct { content: []const u8 };
+    const serde = Serde(Doc);
+    const result = serde.deserialize(std.testing.allocator,
+        \\content = """
+        \\this never closes
+    );
+    try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "error: duplicate key-value field" {
+    const Config = struct { name: []const u8, port: u16 };
+    const serde = Serde(Config);
+    const result = serde.deserialize(std.testing.allocator,
+        \\name = "a"
+        \\port = 80
+        \\name = "b"
+    );
+    try std.testing.expectError(error.DuplicateField, result);
 }

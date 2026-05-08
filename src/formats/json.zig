@@ -1,4 +1,6 @@
 const std = @import("std");
+const common = @import("common.zig");
+const Parsed = common.Parsed;
 
 /// Returns a comptime-generated JSON serializer/deserializer for type `T`.
 pub fn Serde(comptime T: type) type {
@@ -68,7 +70,8 @@ pub fn Serde(comptime T: type) type {
             }
         }
 
-        /// Parses `input` as JSON into a `Parsed(T)` that owns all allocated memory; caller must call `deinit()`.
+        /// Parses `input` as JSON into a `Parsed(T)` that owns all allocated memory.
+        /// Caller must call `deinit()`.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
@@ -121,7 +124,8 @@ pub fn Serde(comptime T: type) type {
                                 break;
                             }
                             const ItemParser = Serde(pointer_info.child);
-                            try list.append(allocator, try ItemParser.parseValue(scanner, allocator));
+                            const item = try ItemParser.parseValue(scanner, allocator);
+                            try list.append(allocator, item);
                         }
                         return try list.toOwnedSlice(allocator);
                     } else {
@@ -174,7 +178,8 @@ pub fn Serde(comptime T: type) type {
                             if (std.mem.eql(u8, field.name, key)) {
                                 if (fields_seen[index]) return error.DuplicateField;
                                 const FieldParser = Serde(field.type);
-                                @field(result, field.name) = try FieldParser.parseValue(scanner, allocator);
+                                const parsed = try FieldParser.parseValue(scanner, allocator);
+                                @field(result, field.name) = parsed;
                                 fields_seen[index] = true;
                                 break;
                             }
@@ -185,7 +190,8 @@ pub fn Serde(comptime T: type) type {
                     inline for (struct_info.fields, 0..) |field, index| {
                         if (!fields_seen[index]) {
                             if (field.default_value_ptr) |default_ptr| {
-                                @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_ptr))).*;
+                                const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
+                                @field(result, field.name) = ptr.*;
                             } else {
                                 return error.MissingField;
                             }
@@ -199,9 +205,9 @@ pub fn Serde(comptime T: type) type {
     };
 }
 
-fn writeString(writer: *std.Io.Writer, s: []const u8) !void {
+fn writeString(writer: *std.Io.Writer, string: []const u8) !void {
     try writer.writeByte('"');
-    for (s) |char| {
+    for (string) |char| {
         switch (char) {
             '"' => try writer.writeAll("\\\""),
             '\\' => try writer.writeAll("\\\\"),
@@ -218,19 +224,6 @@ fn writeString(writer: *std.Io.Writer, s: []const u8) !void {
         }
     }
     try writer.writeByte('"');
-}
-
-/// Wraps a deserialized value of type `T` with an arena allocator for deterministic cleanup.
-pub fn Parsed(comptime T: type) type {
-    return struct {
-        arena: std.heap.ArenaAllocator,
-        value: T,
-
-        /// Frees all memory allocated during deserialization.
-        pub fn deinit(self: *@This()) void {
-            self.arena.deinit();
-        }
-    };
 }
 
 test "serialize bool" {
@@ -471,4 +464,84 @@ test "roundtrip: nested struct with optional and array" {
     try std.testing.expectEqual(original.tags.len, restored.value.tags.len);
     try std.testing.expectEqualStrings("web", restored.value.tags[0]);
     try std.testing.expectEqualStrings("api", restored.value.tags[1]);
+}
+
+// ==================== Error Case Tests ====================
+
+test "error: missing required field" {
+    const User = struct { name: []const u8, age: u32 };
+    const serde = Serde(User);
+    const result = serde.deserialize(std.testing.allocator, "{\"name\":\"alice\"}");
+    try std.testing.expectError(error.MissingField, result);
+}
+
+test "error: duplicate field" {
+    const User = struct { name: []const u8 };
+    const serde = Serde(User);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"name":"alice","name":"bob"}
+    );
+    try std.testing.expectError(error.DuplicateField, result);
+}
+
+test "error: type mismatch string for int" {
+    const Data = struct { count: u32 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"count":"hello"}
+    );
+    try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "error: type mismatch int for bool" {
+    const Data = struct { flag: bool };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"flag":123}
+    );
+    try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "error: empty input" {
+    const Data = struct { name: []const u8 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator, "");
+    try std.testing.expect(std.meta.isError(result));
+}
+
+test "error: malformed json missing closing brace" {
+    const Data = struct { name: []const u8 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"name":"alice"
+    );
+    try std.testing.expect(std.meta.isError(result));
+}
+
+test "error: malformed json invalid value" {
+    const Data = struct { name: []const u8 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"name":undefined}
+    );
+    try std.testing.expect(std.meta.isError(result));
+}
+
+test "error: array expected but got object" {
+    const Data = struct { items: []const u32 };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"items":{"a":1}}
+    );
+    try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "error: object expected but got array" {
+    const Inner = struct { x: u32 };
+    const Data = struct { inner: Inner };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"inner":[1,2]}
+    );
+    try std.testing.expectError(error.UnexpectedToken, result);
 }
