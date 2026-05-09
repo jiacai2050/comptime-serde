@@ -3,7 +3,23 @@
 ![](https://img.shields.io/badge/zig%20version-0.16.0-F7A41D.svg)
 ![](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml/badge.svg)
 
-Compile-time serialization and deserialization for Zig. Zero runtime overhead — all type dispatch happens at comptime.
+> Compile-time serialization and deserialization for Zig.
+
+Define your struct once, automatically serialize/deserialize across JSON, TOML, YAML, and Protobuf — zero runtime overhead, all type dispatch happens at comptime via `@typeInfo`.
+
+```
+                          ┌─────────────┐
+                          │  Zig Struct │
+                          └──────┬──────┘
+                                 │
+                      Serde(format, T)
+                                 │
+            ┌────────┬───────────┼───────────┬──────────┐
+            ▼        ▼           ▼           ▼          ▼
+        ┌──────┐ ┌──────┐  ┌────────┐  ┌────────┐ ┌──────────┐
+        │ JSON │ │ TOML │  │  YAML  │  │Protobuf│ │  ...     │
+        └──────┘ └──────┘  └────────┘  └────────┘ └──────────┘
+```
 
 Requires **Zig 0.16.0**.
 
@@ -48,23 +64,38 @@ try yaml.serialize(&yaml_writer, User{ .name = "alice", .age = 30, .active = tru
 // name: alice
 // age: 30
 // active: true
+
+// Protobuf (binary wire format)
+const pb = serde.Serde(.protobuf, User);
+var pb_buf: [512]u8 = undefined;
+var pb_writer = std.Io.Writer.fixed(&pb_buf);
+try pb.serialize(&pb_writer, allocator, User{ .name = "alice", .age = 30, .active = true });
+// pb_writer.buffered() contains proto3 wire format bytes
+
+var pb_result = try pb.deserialize(allocator, pb_writer.buffered());
+defer pb_result.deinit();
+// pb_result.value is a User
 ```
 
 ## Supported types
 
-| Type | JSON | TOML | YAML |
-|------|------|------|------|
-| `bool` | `true` / `false` | `true` / `false` | `true` / `false` |
-| Integers | `42` | `42` | `42` |
-| Floats | `3.14` | `3.14` | `3.14` |
-| `[]const u8` | `"hello"` | `"hello"` | `hello` |
-| `[N]u8` | `"hello"` | `"hello"` | `hello` |
-| `[]T` / `[N]T` | `[1,2,3]` | `[1, 2, 3]` | `- 1`<br>`- 2` |
-| `?T` | value or `null` | value or `""` | value or `null` |
-| `struct` | `{"key":value}` | `[table]` sections | indented mapping |
-| `[]const Struct` | `[{...}]` | `[[array]]` sections | `- key: val` |
-| Multi-line `[]const u8` | `"a\nb"` | `"""\na\nb"""` | `\|-` block scalar |
-| `enum` | `"active"` | `"active"` | `active` |
+| Type | JSON | TOML | YAML | Protobuf |
+|------|------|------|------|----------|
+| `bool` | `true` / `false` | `true` / `false` | `true` / `false` | varint |
+| Integers | `42` | `42` | `42` | varint (zigzag for signed) |
+| Floats | `3.14` | `3.14` | `3.14` | fixed32 / fixed64 |
+| `[]const u8` | `"hello"` | `"hello"` | `hello` | length-delimited |
+| `[N]u8` | `"hello"` | `"hello"` | `hello` | — |
+| `[]T` / `[N]T` | `[1,2,3]` | `[1, 2, 3]` | `- 1`<br>`- 2` | packed repeated |
+| `?T` | value or `null` | value or `""` | value or `null` | field absent if null |
+| `struct` | `{"key":value}` | `[table]` sections | indented mapping | nested message |
+| `[]const Struct` | `[{...}]` | `[[array]]` sections | `- key: val` | repeated message |
+| Multi-line `[]const u8` | `"a\nb"` | `"""\na\nb"""` | `\|-` block scalar | — |
+| `enum` | `"active"` | `"active"` | `active` | varint |
+
+### Protobuf notes
+
+The protobuf format encodes structs as proto3 wire format. Field numbers are assigned by struct field declaration order (1-based). No `.proto` file is needed — just define your Zig struct and serialize directly. Signed integers use zigzag encoding (equivalent to `sint32`/`sint64` in proto3).
 
 Struct fields with default values are optional during deserialization.
 
