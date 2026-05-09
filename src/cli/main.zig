@@ -1,73 +1,116 @@
 const std = @import("std");
+const structargs = @import("zigcli").structargs;
 const infer_json = @import("infer_json.zig");
 const infer_toml = @import("infer_toml.zig");
 const infer_yaml = @import("infer_yaml.zig");
 
-pub fn main(init: std.process.Init.Minimal) !void {
-    var debug_allocator = std.heap.DebugAllocator(.{}){};
-    const allocator = debug_allocator.allocator();
+const Format = enum { json, toml, yaml };
 
-    var args_iter = std.process.Args.Iterator.init(init.args);
-    _ = args_iter.skip();
+const Options = struct {
+    format: ?Format = null,
+    @"root-name": []const u8 = "Root",
+    help: bool = false,
 
-    const file_path: [:0]const u8 = args_iter.next() orelse {
-        writeStderr("Usage: serde-gen <file.json|file.toml|file.yaml>\n");
-        std.process.exit(1);
+    pub const __shorts__ = .{
+        .format = .f,
+        .help = .h,
+    };
+    pub const __messages__ = .{
+        .format = "Force format (json, toml, yaml). Auto-detected from extension if omitted.",
+        .@"root-name" = "Name of the top-level struct.",
+    };
+};
+
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
+
+    const result = structargs.parse(
+        allocator,
+        io,
+        init.minimal.args,
+        Options,
+        .{
+            .argument_prompt = "FILE",
+            .version_string = "0.1.0",
+        },
+    ) catch |err| {
+        std.process.fatal("failed to parse arguments: {t}", .{err});
+    };
+    defer result.deinit();
+
+    const file_path = if (result.positional_arguments.len > 0)
+        result.positional_arguments[0]
+    else {
+        std.process.fatal("missing input file. Use --help for usage.", .{});
     };
 
-    const ext = std.fs.path.extension(file_path);
-
-    const generator = selectGenerator(ext) orelse {
-        writeStderr("Error: unsupported format (use .json, .toml, .yaml, or .yml)\n");
-        std.process.exit(1);
+    const format = result.options.format orelse detectFormat(file_path) orelse {
+        std.process.fatal("cannot detect format from extension. Use --format to specify.", .{});
     };
 
-    const content = readFile(allocator, file_path) orelse {
-        writeStderr("Error: failed to read file\n");
-        std.process.exit(1);
+    const generator = selectGenerator(format);
+
+    const content = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        file_path,
+        allocator,
+        std.Io.Limit.limited(10 * 1024 * 1024),
+    ) catch {
+        std.process.fatal("failed to read file: {s}", .{file_path});
     };
     defer allocator.free(content);
 
-    const output = generator(allocator, content) catch {
-        writeStderr("Error: failed to generate struct definitions\n");
-        std.process.exit(1);
+    const raw_output = generator(allocator, content) catch {
+        std.process.fatal("failed to generate struct definitions", .{});
     };
-    defer allocator.free(output);
+    defer allocator.free(raw_output);
 
-    writeStdout(output);
+    const root_name = result.options.@"root-name";
+    const output = if (!std.mem.eql(u8, root_name, "Root"))
+        renameRoot(allocator, raw_output, root_name) catch raw_output
+    else
+        raw_output;
+    defer if (!std.mem.eql(u8, root_name, "Root")) allocator.free(output);
+
+    try std.Io.File.stdout().writeStreamingAll(io, output);
 }
 
 const GenerateFn = *const fn (std.mem.Allocator, []const u8) anyerror![]const u8;
 
-fn selectGenerator(ext: []const u8) ?GenerateFn {
-    if (std.mem.eql(u8, ext, ".json")) return &infer_json.generate;
-    if (std.mem.eql(u8, ext, ".toml")) return &infer_toml.generate;
-    if (std.mem.eql(u8, ext, ".yaml") or std.mem.eql(u8, ext, ".yml")) return &infer_yaml.generate;
-    return null;
+fn selectGenerator(format: Format) GenerateFn {
+    return switch (format) {
+        .json => &infer_json.generate,
+        .toml => &infer_toml.generate,
+        .yaml => &infer_yaml.generate,
+    };
 }
 
-fn readFile(allocator: std.mem.Allocator, path: [:0]const u8) ?[]u8 {
-    const file = std.c.fopen(path, "r") orelse return null;
-    defer _ = std.c.fclose(file);
+fn renameRoot(allocator: std.mem.Allocator, source: []const u8, name: []const u8) ![]const u8 {
+    const needle = "const Root =";
+    const replacement = try std.fmt.allocPrint(allocator, "const {s} =", .{name});
+    defer allocator.free(replacement);
 
-    var content = std.ArrayList(u8).empty;
-    var buf: [4096]u8 = undefined;
-    while (true) {
-        const read = std.c.fread(&buf, 1, buf.len, file);
-        if (read > 0) {
-            content.appendSlice(allocator, buf[0..read]) catch return null;
-        }
-        if (read < buf.len) break;
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(allocator);
+
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, source, pos, needle)) |found| {
+        try result.appendSlice(allocator, source[pos..found]);
+        try result.appendSlice(allocator, replacement);
+        pos = found + needle.len;
     }
-    return content.toOwnedSlice(allocator) catch null;
+    try result.appendSlice(allocator, source[pos..]);
+
+    return try result.toOwnedSlice(allocator);
 }
 
-fn writeStdout(bytes: []const u8) void {
-    _ = std.c.write(std.posix.STDOUT_FILENO, bytes.ptr, bytes.len);
-}
-
-fn writeStderr(bytes: []const u8) void {
-    _ = std.c.write(std.posix.STDERR_FILENO, bytes.ptr, bytes.len);
+fn detectFormat(path: []const u8) ?Format {
+    const ext = std.fs.path.extension(path);
+    if (std.mem.eql(u8, ext, ".json")) return .json;
+    if (std.mem.eql(u8, ext, ".toml")) return .toml;
+    if (std.mem.eql(u8, ext, ".yaml") or std.mem.eql(u8, ext, ".yml")) return .yaml;
+    return null;
 }
 
 test {

@@ -2,7 +2,13 @@
     .name = .comptime_serde,
     .fingerprint = 0xf93787381fe72637,
     .version = "0.1.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .zigcli = .{
+            .url = "git+https://github.com/jiacai2050/zigcli.git#76c5b533d44a13ce70bddd696378f904c9af5ac3",
+            .hash = "zigcli-0.6.1-ORC7jLRBBgAb-rLTyCIC6Ys0-hGJTfnnKwi6mZQ6lzt1",
+            .lazy = true,
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
