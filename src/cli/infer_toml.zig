@@ -1,0 +1,343 @@
+const std = @import("std");
+
+const StructDef = struct {
+    name: []const u8,
+    fields: std.ArrayList(FieldDef),
+};
+
+const FieldDef = struct {
+    name: []const u8,
+    type_name: []const u8,
+};
+
+/// Infers Zig struct definitions from TOML content.
+/// Returns the generated source code as a string.
+pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var structs = std.ArrayList(StructDef).empty;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    try parseTopLevel(arena_alloc, &lines, "Root", &structs);
+
+    return try renderStructs(allocator, arena_alloc, structs.items);
+}
+
+fn parseTopLevel(
+    allocator: std.mem.Allocator,
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    name: []const u8,
+    structs: *std.ArrayList(StructDef),
+) !void {
+    var root_fields = std.ArrayList(FieldDef).empty;
+
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \r");
+        if (line.len == 0 or line[0] == '#') continue;
+
+        if (line[0] == '[') {
+            if (line.len > 2 and line[1] == '[') {
+                // [[array]] — array of tables.
+                const raw_name = extractName(line, 2, line.len - 2);
+                const struct_name = try capitalizeFirst(allocator, raw_name);
+                try parseTableInto(allocator, lines, struct_name, structs);
+                if (!hasField(root_fields.items, raw_name)) {
+                    const type_name = try std.fmt.allocPrint(
+                        allocator,
+                        "[]const {s}",
+                        .{struct_name},
+                    );
+                    try root_fields.append(allocator, .{
+                        .name = raw_name,
+                        .type_name = type_name,
+                    });
+                }
+            } else {
+                // [table] — nested struct.
+                const raw_name = extractName(line, 1, line.len - 1);
+                const struct_name = try capitalizeFirst(allocator, raw_name);
+                try parseTableInto(allocator, lines, struct_name, structs);
+                if (!hasField(root_fields.items, raw_name)) {
+                    try root_fields.append(allocator, .{
+                        .name = raw_name,
+                        .type_name = struct_name,
+                    });
+                }
+            }
+        } else {
+            // Key-value pair.
+            if (parseKv(line)) |kv| {
+                try root_fields.append(allocator, .{
+                    .name = kv.key,
+                    .type_name = inferValueType(kv.value),
+                });
+            }
+        }
+    }
+
+    try structs.append(allocator, .{ .name = name, .fields = root_fields });
+}
+
+fn parseTableInto(
+    allocator: std.mem.Allocator,
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    name: []const u8,
+    structs: *std.ArrayList(StructDef),
+) !void {
+    // Check if we already have this struct defined (from a previous [[array]] entry).
+    // Still need to consume the lines belonging to this section.
+    for (structs.items) |s| {
+        if (std.mem.eql(u8, s.name, name)) {
+            skipSection(lines);
+            return;
+        }
+    }
+
+    var fields = std.ArrayList(FieldDef).empty;
+
+    while (lines.peek()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \r");
+        if (line.len == 0 or line[0] == '#') {
+            _ = lines.next();
+            continue;
+        }
+        if (line[0] == '[') break;
+
+        _ = lines.next();
+        if (parseKv(line)) |kv| {
+            try fields.append(allocator, .{
+                .name = kv.key,
+                .type_name = inferValueType(kv.value),
+            });
+        }
+    }
+
+    try structs.append(allocator, .{ .name = name, .fields = fields });
+}
+
+fn skipSection(lines: *std.mem.SplitIterator(u8, .scalar)) void {
+    while (lines.peek()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \r");
+        if (line.len == 0 or line[0] == '#') {
+            _ = lines.next();
+            continue;
+        }
+        if (line[0] == '[') return;
+        _ = lines.next();
+    }
+}
+
+fn hasField(fields: []const FieldDef, name: []const u8) bool {
+    for (fields) |f| {
+        if (std.mem.eql(u8, f.name, name)) return true;
+    }
+    return false;
+}
+
+const Kv = struct { key: []const u8, value: []const u8 };
+
+fn parseKv(line: []const u8) ?Kv {
+    const eq_index = std.mem.indexOfScalar(u8, line, '=') orelse return null;
+    const key = std.mem.trim(u8, line[0..eq_index], " ");
+    const value = std.mem.trim(u8, line[eq_index + 1 ..], " ");
+    return .{ .key = key, .value = value };
+}
+
+fn inferValueType(value: []const u8) []const u8 {
+    if (value.len == 0) return "[]const u8";
+
+    if (std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "false")) {
+        return "bool";
+    }
+    if (std.mem.eql(u8, value, "\"\"") or std.mem.eql(u8, value, "null")) {
+        return "?[]const u8";
+    }
+    if (value[0] == '"' or (value.len >= 3 and std.mem.startsWith(u8, value, "\"\"\""))) {
+        return "[]const u8";
+    }
+    if (value[0] == '[') return "[]const []const u8";
+
+    // Try integer.
+    if (isInteger(value)) return "i64";
+    // Try float.
+    if (isFloat(value)) return "f64";
+
+    return "[]const u8";
+}
+
+fn isInteger(value: []const u8) bool {
+    var start: usize = 0;
+    if (value.len > 0 and (value[0] == '-' or value[0] == '+')) start = 1;
+    if (start >= value.len) return false;
+    for (value[start..]) |char| {
+        if (char < '0' or char > '9') return false;
+    }
+    return true;
+}
+
+fn isFloat(value: []const u8) bool {
+    var has_dot = false;
+    var start: usize = 0;
+    if (value.len > 0 and (value[0] == '-' or value[0] == '+')) start = 1;
+    if (start >= value.len) return false;
+    for (value[start..]) |char| {
+        if (char == '.') {
+            if (has_dot) return false;
+            has_dot = true;
+        } else if (char < '0' or char > '9') {
+            return false;
+        }
+    }
+    return has_dot;
+}
+
+fn extractName(line: []const u8, start: usize, end: usize) []const u8 {
+    return std.mem.trim(u8, line[start..end], " ");
+}
+
+fn renderStructs(
+    caller_alloc: std.mem.Allocator,
+    arena_alloc: std.mem.Allocator,
+    structs: []const StructDef,
+) ![]const u8 {
+    var output = std.ArrayList(u8).empty;
+
+    for (structs) |struct_def| {
+        const capitalized = capitalizeFirst(arena_alloc, struct_def.name) catch struct_def.name;
+        const formatted_name = formatName(arena_alloc, capitalized) catch capitalized;
+        const header = try std.fmt.allocPrint(
+            arena_alloc,
+            "const {s} = struct {{\n",
+            .{formatted_name},
+        );
+        try output.appendSlice(arena_alloc, header);
+
+        for (struct_def.fields.items) |field| {
+            const formatted_field = formatName(arena_alloc, field.name) catch field.name;
+            const line = try std.fmt.allocPrint(
+                arena_alloc,
+                "    {s}: {s},\n",
+                .{ formatted_field, field.type_name },
+            );
+            try output.appendSlice(arena_alloc, line);
+        }
+        try output.appendSlice(arena_alloc, "};\n\n");
+    }
+
+    while (output.items.len > 0 and output.items[output.items.len - 1] == '\n') {
+        output.items.len -= 1;
+    }
+    try output.append(arena_alloc, '\n');
+
+    return try caller_alloc.dupe(u8, output.items);
+}
+
+fn needsQuoting(name: []const u8) bool {
+    if (name.len == 0) return true;
+    if (name[0] >= '0' and name[0] <= '9') return true;
+    for (name) |char| {
+        const is_alnum = (char >= 'a' and char <= 'z') or
+            (char >= 'A' and char <= 'Z') or
+            (char >= '0' and char <= '9') or
+            char == '_';
+        if (!is_alnum) return true;
+    }
+    return false;
+}
+
+fn formatName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    if (needsQuoting(name)) {
+        return try std.fmt.allocPrint(allocator, "@\"{s}\"", .{name});
+    }
+    return name;
+}
+
+fn capitalizeFirst(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    if (name.len == 0) return name;
+    if (name[0] >= 'a' and name[0] <= 'z') {
+        const result = try allocator.dupe(u8, name);
+        result[0] -= 32;
+        return result;
+    }
+    return name;
+}
+
+// ==================== Tests ====================
+
+test "infer flat struct" {
+    const output = try generate(std.testing.allocator,
+        \\name = "myapp"
+        \\port = 8080
+        \\debug = true
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Root = struct {
+        \\    name: []const u8,
+        \\    port: i64,
+        \\    debug: bool,
+        \\};
+        \\
+    , output);
+}
+
+test "infer nested table" {
+    const output = try generate(std.testing.allocator,
+        \\name = "myapp"
+        \\[server]
+        \\host = "localhost"
+        \\port = 443
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Server = struct {
+        \\    host: []const u8,
+        \\    port: i64,
+        \\};
+        \\
+        \\const Root = struct {
+        \\    name: []const u8,
+        \\    server: Server,
+        \\};
+        \\
+    , output);
+}
+
+test "infer table array" {
+    const output = try generate(std.testing.allocator,
+        \\[[servers]]
+        \\host = "a.com"
+        \\port = 80
+        \\[[servers]]
+        \\host = "b.com"
+        \\port = 443
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Servers = struct {
+        \\    host: []const u8,
+        \\    port: i64,
+        \\};
+        \\
+        \\const Root = struct {
+        \\    servers: []const Servers,
+        \\};
+        \\
+    , output);
+}
+
+test "infer float and null" {
+    const output = try generate(std.testing.allocator,
+        \\ratio = 3.14
+        \\missing = null
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Root = struct {
+        \\    ratio: f64,
+        \\    missing: ?[]const u8,
+        \\};
+        \\
+    , output);
+}

@@ -9,11 +9,9 @@ pub const Format = enum { json, toml, yaml };
 
 /// Returns a comptime-generated type with serialize/deserialize methods
 /// for `T` in the given `format`.
-pub fn Serde(format: Format, comptime T: type) type {
+pub fn Serde(comptime format: Format, comptime T: type) type {
     return switch (format) {
-        .json => json.Serde(T),
-        .toml => toml.Serde(T),
-        .yaml => yaml.Serde(T),
+        inline else => |fmt| fmt.Serde(T),
     };
 }
 

@@ -7,7 +7,7 @@ lint:
 	zig fmt --check .
 
 test:
-	zig build test --test-timeout 5s $(ARGS)
+	zig build test --test-timeout 5s --summary all $(ARGS)
 
 docs:
 	zig build docs

@@ -82,6 +82,45 @@ const serde_dep = b.dependency("comptime_serde", .{});
 exe.root_module.addImport("comptime_serde", serde_dep.module("comptime_serde"));
 ```
 
+## serde-gen CLI
+
+A code generation tool that infers Zig struct definitions from data files.
+
+```bash
+# Build
+zig build
+
+# Generate from JSON
+zig build run -- config.json
+
+# Generate from TOML
+zig build run -- config.toml
+
+# Generate from YAML
+zig build run -- config.yaml
+```
+
+Example — given `config.json`:
+
+```json
+{"name": "myapp", "port": 8080, "server": {"host": "localhost", "tls": true}}
+```
+
+Output:
+
+```zig
+const Server = struct {
+    host: []const u8,
+    tls: bool,
+};
+
+const Root = struct {
+    name: []const u8,
+    port: i64,
+    server: Server,
+};
+```
+
 ## Running tests
 
 ```
