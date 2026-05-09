@@ -21,12 +21,25 @@ pub fn build(b: *std.Build) void {
     })) |zigcli_dep| {
         const zigcli_mod = zigcli_dep.module("zigcli");
 
+        const build_options = b.addOptions();
+        build_options.addOption(
+            []const u8,
+            "version",
+            b.option([]const u8, "version", "Version string") orelse "dev",
+        );
+        build_options.addOption(
+            []const u8,
+            "git_commit",
+            b.option([]const u8, "git_commit", "Git commit") orelse "unknown",
+        );
+
         const exe_mod = b.createModule(.{
             .root_source_file = b.path("src/cli/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zigcli", .module = zigcli_mod },
+                .{ .name = "build_options", .module = build_options.createModule() },
             },
         });
         const exe = b.addExecutable(.{
@@ -47,6 +60,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zigcli", .module = zigcli_mod },
+                .{ .name = "build_options", .module = build_options.createModule() },
             },
         });
         const cli_tests = b.addTest(.{ .root_module = cli_test_mod });

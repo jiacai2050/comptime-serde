@@ -1,5 +1,8 @@
 # comptime-serde
 
+![](https://img.shields.io/badge/zig%20version-0.16.0-F7A41D.svg)
+![](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml/badge.svg)
+
 Compile-time serialization and deserialization for Zig. Zero runtime overhead — all type dispatch happens at comptime.
 
 Requires **Zig 0.16.0**.
@@ -87,19 +90,33 @@ exe.root_module.addImport("comptime_serde", serde_dep.module("comptime_serde"));
 
 A code generation tool that infers Zig struct definitions from data files.
 
+Pre-built binaries are available on the [GitHub Releases](https://github.com/jiacai2050/comptime-serde/releases) page, or build from source:
+
 ```bash
-# Build
+# Build from source
 zig build
 
-# Generate from JSON
-zig build run -- config.json
+# Generate from JSON (format auto-detected from extension)
+serde-gen config.json
 
-# Generate from TOML
-zig build run -- config.toml
+# Force format explicitly
+serde-gen --format toml config.txt
 
-# Generate from YAML
-zig build run -- config.yaml
+# Custom top-level struct name
+serde-gen --root-name Config config.yaml
+
+# Show help / version
+serde-gen --help
+serde-gen --version
 ```
+
+Options:
+
+| Flag | Description |
+|------|-------------|
+| `--format json\|toml\|yaml` | Force format (default: auto-detect from extension) |
+| `--root-name NAME` | Name of the top-level struct (default: `Root`) |
+| `-h`, `--help` | Show usage |
 
 Example — given `config.json`:
 

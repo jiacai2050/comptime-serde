@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            os: ubuntu-latest
+          - target: aarch64-linux
+            os: ubuntu-latest
+          - target: x86_64-macos
+            os: macos-latest
+          - target: aarch64-macos
+            os: macos-latest
+          - target: x86_64-windows
+            os: ubuntu-latest
+          - target: aarch64-windows
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+      - name: Set version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "RELEASE_VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            echo "RELEASE_VERSION=nightly" >> $GITHUB_ENV
+          fi
+      - name: Build
+        run: |
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${RELEASE_VERSION} -Dgit_commit=${GIT_COMMIT}
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            zip serde-gen-${RELEASE_VERSION}-${{ matrix.target }}.zip zig-out/bin/serde-gen.exe
+          else
+            tar -czf serde-gen-${RELEASE_VERSION}-${{ matrix.target }}.tar.gz -C zig-out/bin serde-gen
+          fi
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            serde-gen-*.tar.gz
+            serde-gen-*.zip
+      - name: Upload artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: serde-gen-${{ matrix.target }}
+          path: |
+            serde-gen-*.tar.gz
+            serde-gen-*.zip

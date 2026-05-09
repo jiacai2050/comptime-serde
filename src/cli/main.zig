@@ -1,8 +1,27 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 const structargs = @import("zigcli").structargs;
 const infer_json = @import("infer_json.zig");
 const infer_toml = @import("infer_toml.zig");
 const infer_yaml = @import("infer_yaml.zig");
+
+const version_string = std.fmt.comptimePrint(
+    \\serde-gen
+    \\ - version: {s}
+    \\ - commit: https://github.com/jiacai2050/comptime-serde/commit/{s}
+    \\
+    \\Build Config:
+    \\ - build mode: {s}
+    \\ - zig version: {s}
+    \\ - zig backend: {s}
+, .{
+    build_options.version,
+    build_options.git_commit,
+    @tagName(builtin.mode),
+    builtin.zig_version_string,
+    @tagName(builtin.zig_backend),
+});
 
 const Format = enum { json, toml, yaml };
 
@@ -10,10 +29,12 @@ const Options = struct {
     format: ?Format = null,
     @"root-name": []const u8 = "Root",
     help: bool = false,
+    version: bool = false,
 
     pub const __shorts__ = .{
         .format = .f,
         .help = .h,
+        .version = .v,
     };
     pub const __messages__ = .{
         .format = "Force format (json, toml, yaml). Auto-detected from extension if omitted.",
@@ -32,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
         Options,
         .{
             .argument_prompt = "FILE",
-            .version_string = "0.1.0",
+            .version_string = version_string,
         },
     ) catch |err| {
         std.process.fatal("failed to parse arguments: {t}", .{err});
