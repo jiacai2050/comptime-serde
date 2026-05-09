@@ -7,12 +7,14 @@ pub fn Serde(comptime T: type) type {
     return struct {
         /// Writes `value` as TOML to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
+            comptime validateFieldConfigs(T);
             try writeTable(writer, value);
         }
 
         /// Parses `input` as TOML into a `Parsed(T)` that owns all allocated memory.
         /// Caller must call `deinit()`.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+            comptime validateFieldConfigs(T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
@@ -32,62 +34,76 @@ pub fn Serde(comptime T: type) type {
 /// Writes a struct as TOML: key-value pairs first, then nested table sections.
 fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
     const T = @TypeOf(value);
+    comptime validateFieldConfigs(T);
     const info = @typeInfo(T);
     switch (info) {
         .@"struct" => |struct_info| {
             // Pass 1: write key-value pairs (primitives, strings, inline arrays).
             inline for (struct_info.fields) |field| {
-                const field_type_info = @typeInfo(field.type);
-                switch (field_type_info) {
-                    .@"struct" => {}, // handled in pass 2
-                    .pointer => |pointer_info| {
-                        if (pointer_info.size == .slice and pointer_info.child == u8) {
-                            // String slice → inline KV.
-                            try writeKeyValue(writer, field.name, @field(value, field.name));
-                        } else if (pointer_info.size == .slice) {
-                            // Non-string slice: inline if primitives, table array if structs.
-                            const child_info = @typeInfo(pointer_info.child);
-                            if (child_info != .@"struct") {
-                                try writeKeyValue(writer, field.name, @field(value, field.name));
+                const config = fieldConfig(T, field.name);
+                const field_value = @field(value, field.name);
+                var include_field = !config.skip;
+                if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
+                    include_field = false;
+                }
+                if (include_field) {
+                    const field_key = serializedFieldName(T, field.name);
+                    const field_type_info = @typeInfo(field.type);
+                    switch (field_type_info) {
+                        .@"struct" => {}, // handled in pass 2
+                        .pointer => |pointer_info| {
+                            if (pointer_info.size == .slice and pointer_info.child == u8) {
+                                // String slice → inline KV.
+                                try writeKeyValue(writer, field_key, field_value);
+                            } else if (pointer_info.size == .slice) {
+                                // Non-string slice: inline if primitives, table array if structs.
+                                const child_info = @typeInfo(pointer_info.child);
+                                if (child_info != .@"struct") {
+                                    try writeKeyValue(writer, field_key, field_value);
+                                }
                             }
-                        }
-                    },
-                    else => {
-                        try writeKeyValue(writer, field.name, @field(value, field.name));
-                    },
+                        },
+                        else => {
+                            try writeKeyValue(writer, field_key, field_value);
+                        },
+                    }
                 }
             }
             // Pass 2: write [table] and [[array]] sections.
             inline for (struct_info.fields) |field| {
-                const field_type_info = @typeInfo(field.type);
-                switch (field_type_info) {
-                    .@"struct" => {
-                        try writer.print("[{s}]\n", .{field.name});
-                        try writeTable(writer, @field(value, field.name));
-                    },
-                    .pointer => |pointer_info| {
-                        if (pointer_info.size == .slice and pointer_info.child != u8) {
-                            const child_info = @typeInfo(pointer_info.child);
-                            if (child_info == .@"struct") {
-                                for (@field(value, field.name)) |item| {
-                                    try writer.print("[[{s}]]\n", .{field.name});
-                                    try writeTable(writer, item);
+                const config = fieldConfig(T, field.name);
+                if (!config.skip) {
+                    const field_key = serializedFieldName(T, field.name);
+                    const field_type_info = @typeInfo(field.type);
+                    switch (field_type_info) {
+                        .@"struct" => {
+                            try writer.print("[{s}]\n", .{field_key});
+                            try writeTable(writer, @field(value, field.name));
+                        },
+                        .pointer => |pointer_info| {
+                            if (pointer_info.size == .slice and pointer_info.child != u8) {
+                                const child_info = @typeInfo(pointer_info.child);
+                                if (child_info == .@"struct") {
+                                    for (@field(value, field.name)) |item| {
+                                        try writer.print("[[{s}]]\n", .{field_key});
+                                        try writeTable(writer, item);
+                                    }
                                 }
                             }
-                        }
-                    },
-                    .array => |array_info| {
-                        if (array_info.child != u8) {
-                            const child_info = @typeInfo(array_info.child);
-                            if (child_info == .@"struct") {
-                                for (@field(value, field.name)) |item| {
-                                    try writer.print("[[{s}]]\n", .{field.name});
-                                    try writeTable(writer, item);
+                        },
+                        .array => |array_info| {
+                            if (array_info.child != u8) {
+                                const child_info = @typeInfo(array_info.child);
+                                if (child_info == .@"struct") {
+                                    for (@field(value, field.name)) |item| {
+                                        try writer.print("[[{s}]]\n", .{field_key});
+                                        try writeTable(writer, item);
+                                    }
                                 }
                             }
-                        }
-                    },
-                    else => {},
+                        },
+                        else => {},
+                    }
                 }
             }
         },
@@ -95,7 +111,7 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
     }
 }
 
-fn writeKeyValue(writer: *std.Io.Writer, comptime key: []const u8, value: anytype) !void {
+fn writeKeyValue(writer: *std.Io.Writer, key: []const u8, value: anytype) !void {
     try writer.print("{s} = ", .{key});
     try writeValue(writer, value);
     try writer.writeByte('\n');
@@ -201,6 +217,61 @@ fn writeInlineArray(writer: *std.Io.Writer, slice: anytype) !void {
     try writer.writeByte(']');
 }
 
+const TomlFieldConfig = common.TomlFieldOptions;
+
+fn fieldConfig(comptime T: type, comptime field_name: []const u8) TomlFieldConfig {
+    const options = common.fieldOptions(T, field_name);
+    return options.toml orelse .{};
+}
+
+fn serializedFieldName(comptime T: type, comptime field_name: []const u8) []const u8 {
+    const config = fieldConfig(T, field_name);
+    return config.rename orelse field_name;
+}
+
+fn matchesInputKey(comptime T: type, comptime field_name: []const u8, key: []const u8) bool {
+    const config = fieldConfig(T, field_name);
+    if (std.mem.eql(u8, field_name, key)) return true;
+    if (config.rename) |rename| {
+        if (std.mem.eql(u8, rename, key)) return true;
+    }
+    for (config.alias) |alias| {
+        if (std.mem.eql(u8, alias, key)) return true;
+    }
+    return false;
+}
+
+fn validateFieldConfigs(comptime T: type) void {
+    const info = @typeInfo(T);
+    if (info != .@"struct") return;
+    comptime common.validateSerdeFieldNames(T);
+    const struct_info = info.@"struct";
+
+    inline for (struct_info.fields) |field| {
+        const config = fieldConfig(T, field.name);
+        if (config.skip and field.default_value_ptr == null and @typeInfo(field.type) != .optional) {
+            @compileError("toml skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
+        }
+    }
+
+    inline for (struct_info.fields, 0..) |left, left_index| {
+        const left_name = serializedFieldName(T, left.name);
+        const left_config = fieldConfig(T, left.name);
+        inline for (struct_info.fields, 0..) |right, right_index| {
+            if (left_index == right_index) continue;
+            const right_name = serializedFieldName(T, right.name);
+            if (std.mem.eql(u8, left_name, right_name)) {
+                @compileError("toml field key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
+            }
+            for (left_config.alias) |alias| {
+                if (std.mem.eql(u8, alias, right_name) or std.mem.eql(u8, alias, right.name)) {
+                    @compileError("toml alias conflict in " ++ @typeName(T) ++ ": alias '" ++ alias ++ "' conflicts with field " ++ right.name);
+                }
+            }
+        }
+    }
+}
+
 // ==================== Deserialization ====================
 
 /// Parses a full struct including KV lines, [table] headers, and [[array]] headers.
@@ -213,6 +284,7 @@ fn parseStructFull(
     line_ptr: *?[]const u8,
     in_array: bool,
 ) !T {
+    comptime validateFieldConfigs(T);
     const info = @typeInfo(T);
     switch (info) {
         .@"struct" => |struct_info| {
@@ -270,7 +342,10 @@ fn parseStructFull(
 
             inline for (struct_info.fields, 0..) |field, index| {
                 if (!fields_seen[index]) {
-                    if (field.default_value_ptr) |default_ptr| {
+                    const config = fieldConfig(T, field.name);
+                    if (config.skip and @typeInfo(field.type) == .optional) {
+                        @field(result, field.name) = null;
+                    } else if (field.default_value_ptr) |default_ptr| {
                         const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
                         @field(result, field.name) = ptr.*;
                     } else {
@@ -443,7 +518,10 @@ fn parseKvLineWithString(
 ) !void {
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, key)) {
+        if (matchesInputKey(T, field.name, key)) {
+            const config = fieldConfig(T, field.name);
+            const is_skipped: bool = config.skip;
+            if (is_skipped) return;
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
             const is_string_slice = field_info == .pointer and
@@ -484,7 +562,13 @@ fn dispatchTable(
     const struct_info = @typeInfo(T).@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, table_name)) {
+        if (matchesInputKey(T, field.name, table_name)) {
+            const config = fieldConfig(T, field.name);
+            const is_skipped: bool = config.skip;
+            if (is_skipped) {
+                skipSection(lines, line_ptr);
+                return;
+            }
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
             if (field_info == .@"struct") {
@@ -516,7 +600,13 @@ fn dispatchTableArray(
     const struct_info = @typeInfo(T).@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, array_name)) {
+        if (matchesInputKey(T, field.name, array_name)) {
+            const config = fieldConfig(T, field.name);
+            const is_skipped: bool = config.skip;
+            if (is_skipped) {
+                skipSection(lines, line_ptr);
+                return;
+            }
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
             if (field_info == .pointer and field_info.pointer.size == .slice) {
@@ -597,7 +687,10 @@ fn parseKvLine(
 ) !void {
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, key)) {
+        if (matchesInputKey(T, field.name, key)) {
+            const config = fieldConfig(T, field.name);
+            const is_skipped: bool = config.skip;
+            if (is_skipped) return;
             if (fields_seen[index]) return error.DuplicateField;
             // Use a comptime switch to avoid instantiating parseTomlValue for struct types.
             switch (@typeInfo(field.type)) {
@@ -1211,4 +1304,77 @@ test "error: invalid enum value" {
     const serde = Serde(Data);
     const result = serde.deserialize(std.testing.allocator, "status = \"unknown\"\n");
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "serde_fields toml rename and alias" {
+    const Data = struct {
+        name: []const u8,
+
+        pub const serde_fields = .{
+            .name = .{
+                .toml = .{
+                    .rename = "user_name",
+                    .alias = &.{"username"},
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .name = "alice" });
+    try std.testing.expectEqualStrings("user_name = \"alice\"\n", writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\username = "bob"
+    );
+    defer result.deinit();
+    try std.testing.expectEqualStrings("bob", result.value.name);
+}
+
+test "serde_fields toml omit_null" {
+    const Data = struct {
+        id: u32,
+        note: ?[]const u8 = null,
+
+        pub const serde_fields = .{
+            .note = .{
+                .toml = .{ .omit_null = true },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 1, .note = null });
+    try std.testing.expectEqualStrings("id = 1\n", writer.buffered());
+}
+
+test "serde_fields toml skip with default" {
+    const Data = struct {
+        id: u32,
+        secret: []const u8 = "hidden",
+
+        pub const serde_fields = .{
+            .secret = .{
+                .toml = .{ .skip = true },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 7, .secret = "token" });
+    try std.testing.expectEqualStrings("id = 7\n", writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\id = 9
+        \\secret = "ignored"
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(@as(u32, 9), result.value.id);
+    try std.testing.expectEqualStrings("hidden", result.value.secret);
 }

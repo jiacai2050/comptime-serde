@@ -7,12 +7,14 @@ pub fn Serde(comptime T: type) type {
     return struct {
         /// Writes `value` as YAML to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
+            comptime validateFieldConfigs(T);
             try writeValue(writer, value, 0);
         }
 
         /// Parses `input` as YAML into a `Parsed(T)`.
         /// Caller must call `deinit()` to free all allocated memory.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+            comptime validateFieldConfigs(T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
@@ -38,15 +40,26 @@ pub fn Serde(comptime T: type) type {
 
 fn writeValue(writer: *std.Io.Writer, value: anytype, indent: usize) !void {
     const T = @TypeOf(value);
+    comptime validateFieldConfigs(T);
     const info = @typeInfo(T);
     switch (info) {
         .@"struct" => |struct_info| {
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (index > 0 or indent > 0) {
-                    try writeIndent(writer, indent);
+            var wrote_any = false;
+            inline for (struct_info.fields) |field| {
+                const config = fieldConfig(T, field.name);
+                const field_value = @field(value, field.name);
+                var include_field = !config.skip;
+                if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
+                    include_field = false;
                 }
-                try writer.print("{s}:", .{field.name});
-                try writeFieldValue(writer, @field(value, field.name), indent);
+                if (include_field) {
+                    if (wrote_any or indent > 0) {
+                        try writeIndent(writer, indent);
+                    }
+                    wrote_any = true;
+                    try writer.print("{s}:", .{serializedFieldName(T, field.name)});
+                    try writeFieldValue(writer, field_value, indent);
+                }
             }
         },
         else => @compileError("top-level YAML value must be a struct, got: " ++ @typeName(T)),
@@ -152,13 +165,24 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
         },
         .@"struct" => |struct_info| {
             // First field on same line as "- ", rest indented.
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (index > 0) {
-                    try writeIndent(writer, indent + 2);
+            var wrote_any = false;
+            inline for (struct_info.fields) |field| {
+                const config = fieldConfig(T, field.name);
+                const field_value = @field(value, field.name);
+                var include_field = !config.skip;
+                if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
+                    include_field = false;
                 }
-                try writer.print("{s}:", .{field.name});
-                try writeFieldValue(writer, @field(value, field.name), indent + 2);
+                if (include_field) {
+                    if (wrote_any) {
+                        try writeIndent(writer, indent + 2);
+                    }
+                    wrote_any = true;
+                    try writer.print("{s}:", .{serializedFieldName(T, field.name)});
+                    try writeFieldValue(writer, field_value, indent + 2);
+                }
             }
+            if (!wrote_any) try writer.writeByte('\n');
         },
         .@"enum" => {
             try writer.writeAll(@tagName(value));
@@ -279,6 +303,61 @@ fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
     }
 }
 
+const YamlFieldConfig = common.YamlFieldOptions;
+
+fn fieldConfig(comptime T: type, comptime field_name: []const u8) YamlFieldConfig {
+    const options = common.fieldOptions(T, field_name);
+    return options.yaml orelse .{};
+}
+
+fn serializedFieldName(comptime T: type, comptime field_name: []const u8) []const u8 {
+    const config = fieldConfig(T, field_name);
+    return config.rename orelse field_name;
+}
+
+fn matchesInputKey(comptime T: type, comptime field_name: []const u8, key: []const u8) bool {
+    const config = fieldConfig(T, field_name);
+    if (std.mem.eql(u8, field_name, key)) return true;
+    if (config.rename) |rename| {
+        if (std.mem.eql(u8, rename, key)) return true;
+    }
+    for (config.alias) |alias| {
+        if (std.mem.eql(u8, alias, key)) return true;
+    }
+    return false;
+}
+
+fn validateFieldConfigs(comptime T: type) void {
+    const info = @typeInfo(T);
+    if (info != .@"struct") return;
+    comptime common.validateSerdeFieldNames(T);
+    const struct_info = info.@"struct";
+
+    inline for (struct_info.fields) |field| {
+        const config = fieldConfig(T, field.name);
+        if (config.skip and field.default_value_ptr == null and @typeInfo(field.type) != .optional) {
+            @compileError("yaml skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
+        }
+    }
+
+    inline for (struct_info.fields, 0..) |left, left_index| {
+        const left_name = serializedFieldName(T, left.name);
+        const left_config = fieldConfig(T, left.name);
+        inline for (struct_info.fields, 0..) |right, right_index| {
+            if (left_index == right_index) continue;
+            const right_name = serializedFieldName(T, right.name);
+            if (std.mem.eql(u8, left_name, right_name)) {
+                @compileError("yaml field key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
+            }
+            for (left_config.alias) |alias| {
+                if (std.mem.eql(u8, alias, right_name) or std.mem.eql(u8, alias, right.name)) {
+                    @compileError("yaml alias conflict in " ++ @typeName(T) ++ ": alias '" ++ alias ++ "' conflicts with field " ++ right.name);
+                }
+            }
+        }
+    }
+}
+
 // ==================== Deserialization ====================
 
 fn stripCr(line: []const u8) []const u8 {
@@ -307,6 +386,7 @@ fn parseValue(
     pos: *usize,
     base_indent: usize,
 ) !T {
+    comptime validateFieldConfigs(T);
     const info = @typeInfo(T);
     switch (info) {
         .@"struct" => |struct_info| {
@@ -335,7 +415,14 @@ fn parseValue(
                 const after_colon = std.mem.trimStart(u8, trimmed[colon_pos + 1 ..], " ");
 
                 inline for (struct_info.fields, 0..) |field, index| {
-                    if (std.mem.eql(u8, field.name, key)) {
+                    if (matchesInputKey(T, field.name, key)) {
+                        const config = fieldConfig(T, field.name);
+                        const is_skipped: bool = config.skip;
+                        if (is_skipped) {
+                            pos.* += 1;
+                            skipNestedBlock(all_lines, pos, line_indent);
+                            break;
+                        }
                         if (fields_seen[index]) return error.DuplicateField;
                         pos.* += 1;
                         const parsed = try parseFieldValue(
@@ -359,7 +446,10 @@ fn parseValue(
 
             inline for (struct_info.fields, 0..) |field, index| {
                 if (!fields_seen[index]) {
-                    if (field.default_value_ptr) |default_ptr| {
+                    const config = fieldConfig(T, field.name);
+                    if (config.skip and @typeInfo(field.type) == .optional) {
+                        @field(result, field.name) = null;
+                    } else if (field.default_value_ptr) |default_ptr| {
                         const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
                         @field(result, field.name) = ptr.*;
                     } else {
@@ -636,7 +726,13 @@ fn parseSequenceItem(
             const after_colon = std.mem.trimStart(u8, item_content[colon_pos + 1 ..], " ");
 
             inline for (struct_info.fields, 0..) |field, index| {
-                if (std.mem.eql(u8, field.name, key)) {
+                if (matchesInputKey(T, field.name, key)) {
+                    const config = fieldConfig(T, field.name);
+                    const is_skipped: bool = config.skip;
+                    if (is_skipped) {
+                        skipNestedBlock(all_lines, pos, item_indent + 2);
+                        break;
+                    }
                     if (fields_seen[index]) return error.DuplicateField;
                     const parsed = try parseFieldValue(
                         field.type,
@@ -678,7 +774,13 @@ fn parseSequenceItem(
                 pos.* += 1;
 
                 inline for (struct_info.fields, 0..) |field, index| {
-                    if (std.mem.eql(u8, field.name, kv_key)) {
+                    if (matchesInputKey(T, field.name, kv_key)) {
+                        const config = fieldConfig(T, field.name);
+                        const is_skipped: bool = config.skip;
+                        if (is_skipped) {
+                            skipNestedBlock(all_lines, pos, line_indent);
+                            break;
+                        }
                         if (fields_seen[index]) return error.DuplicateField;
                         const parsed = try parseFieldValue(
                             field.type,
@@ -699,7 +801,10 @@ fn parseSequenceItem(
 
             inline for (struct_info.fields, 0..) |field, index| {
                 if (!fields_seen[index]) {
-                    if (field.default_value_ptr) |default_ptr| {
+                    const config = fieldConfig(T, field.name);
+                    if (config.skip and @typeInfo(field.type) == .optional) {
+                        @field(result, field.name) = null;
+                    } else if (field.default_value_ptr) |default_ptr| {
                         const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
                         @field(result, field.name) = ptr.*;
                     } else {
@@ -1307,4 +1412,86 @@ test "error: invalid enum value" {
     const serde = Serde(Data);
     const result = serde.deserialize(std.testing.allocator, "status: unknown\n");
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "serde_fields yaml rename and alias" {
+    const Data = struct {
+        name: []const u8,
+
+        pub const serde_fields = .{
+            .name = .{
+                .yaml = .{
+                    .rename = "user-name",
+                    .alias = &.{"username"},
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .name = "alice" });
+    try std.testing.expectEqualStrings(
+        \\user-name: alice
+        \\
+    , writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\username: bob
+    );
+    defer result.deinit();
+    try std.testing.expectEqualStrings("bob", result.value.name);
+}
+
+test "serde_fields yaml omit_null" {
+    const Data = struct {
+        id: u32,
+        note: ?[]const u8 = null,
+
+        pub const serde_fields = .{
+            .note = .{
+                .yaml = .{ .omit_null = true },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 1, .note = null });
+    try std.testing.expectEqualStrings(
+        \\id: 1
+        \\
+    , writer.buffered());
+}
+
+test "serde_fields yaml skip with default" {
+    const Data = struct {
+        id: u32,
+        secret: []const u8 = "hidden",
+
+        pub const serde_fields = .{
+            .secret = .{
+                .yaml = .{ .skip = true },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 7, .secret = "token" });
+    try std.testing.expectEqualStrings(
+        \\id: 7
+        \\
+    , writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\id: 9
+        \\secret: ignored
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(@as(u32, 9), result.value.id);
+    try std.testing.expectEqualStrings("hidden", result.value.secret);
 }
