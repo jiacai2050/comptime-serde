@@ -61,6 +61,7 @@ try yaml.serialize(&yaml_writer, User{ .name = "alice", .age = 30, .active = tru
 | `struct` | `{"key":value}` | `[table]` sections | indented mapping |
 | `[]const Struct` | `[{...}]` | `[[array]]` sections | `- key: val` |
 | Multi-line `[]const u8` | `"a\nb"` | `"""\na\nb"""` | `\|-` block scalar |
+| `enum` | `"active"` | `"active"` | `active` |
 
 Struct fields with default values are optional during deserialization.
 

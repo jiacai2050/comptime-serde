@@ -131,6 +131,7 @@ fn writeValue(writer: *std.Io.Writer, value: anytype) !void {
                 try writer.writeAll("\"\"");
             }
         },
+        .@"enum" => try writeString(writer, @tagName(value)),
         else => @compileError("unsupported type: " ++ @typeName(T)),
     }
 }
@@ -663,6 +664,15 @@ fn parseTomlValue(
             }
             return try parseTomlValue(optional_info.child, allocator, raw_value);
         },
+        .@"enum" => |enum_info| {
+            const str = try scanString(allocator, raw_value);
+            inline for (enum_info.fields) |field| {
+                if (std.mem.eql(u8, field.name, str)) {
+                    return @enumFromInt(field.value);
+                }
+            }
+            return error.UnexpectedToken;
+        },
         else => @compileError("unsupported type: " ++ @typeName(T)),
     }
 }
@@ -1177,4 +1187,28 @@ test "error: duplicate key-value field" {
         \\name = "b"
     );
     try std.testing.expectError(error.DuplicateField, result);
+}
+
+test "roundtrip: enum" {
+    const Status = enum { active, inactive };
+    const Data = struct { status: Status };
+    const serde = Serde(Data);
+    const original = Data{ .status = .active };
+
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqual(original.status, restored.value.status);
+}
+
+test "error: invalid enum value" {
+    const Status = enum { active, inactive };
+    const Data = struct { status: Status };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator, "status = \"unknown\"\n");
+    try std.testing.expectError(error.UnexpectedToken, result);
 }

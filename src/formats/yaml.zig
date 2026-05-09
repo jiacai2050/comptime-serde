@@ -109,6 +109,11 @@ fn writeFieldValue(writer: *std.Io.Writer, value: anytype, indent: usize) !void 
             try writer.writeByte('\n');
             try writeValue(writer, value, indent + 2);
         },
+        .@"enum" => {
+            try writer.writeByte(' ');
+            try writer.writeAll(@tagName(value));
+            try writer.writeByte('\n');
+        },
         else => @compileError("unsupported type: " ++ @typeName(T)),
     }
 }
@@ -154,6 +159,10 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
                 try writer.print("{s}:", .{field.name});
                 try writeFieldValue(writer, @field(value, field.name), indent + 2);
             }
+        },
+        .@"enum" => {
+            try writer.writeAll(@tagName(value));
+            try writer.writeByte('\n');
         },
         else => @compileError("unsupported sequence item type: " ++ @typeName(T)),
     }
@@ -454,8 +463,15 @@ fn parseFieldValue(
         },
         .@"struct" => {
             if (inline_value.len == 0) {
-                // Nested struct: parse from subsequent indented lines.
                 return try parseValue(T, allocator, all_lines, pos, parent_indent + 2);
+            }
+            return error.UnexpectedToken;
+        },
+        .@"enum" => |enum_info| {
+            inline for (enum_info.fields) |field| {
+                if (std.mem.eql(u8, field.name, inline_value)) {
+                    return @enumFromInt(field.value);
+                }
             }
             return error.UnexpectedToken;
         },
@@ -599,6 +615,14 @@ fn parseSequenceItem(
                 return try parseInlineString(allocator, item_content);
             }
             @compileError("unsupported pointer in sequence: " ++ @typeName(T));
+        },
+        .@"enum" => |enum_info| {
+            inline for (enum_info.fields) |field| {
+                if (std.mem.eql(u8, field.name, item_content)) {
+                    return @enumFromInt(field.value);
+                }
+            }
+            return error.UnexpectedToken;
         },
         .@"struct" => |struct_info| {
             // Inline struct: "- key: value\n  key: value\n..."
@@ -1229,4 +1253,58 @@ test "error: struct sequence item missing field" {
         \\  - host: a.com
     );
     try std.testing.expectError(error.MissingField, result);
+}
+
+test "roundtrip: enum" {
+    const Status = enum { active, inactive };
+    const Data = struct { status: Status };
+    const serde = Serde(Data);
+    const original = Data{ .status = .active };
+
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqual(original.status, restored.value.status);
+}
+
+test "serialize enum in sequence" {
+    const Color = enum { red, green, blue };
+    const Data = struct { colors: []const Color };
+    const serde = Serde(Data);
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, Data{ .colors = &.{ .red, .blue } });
+    try std.testing.expectEqualStrings(
+        \\colors:
+        \\  - red
+        \\  - blue
+        \\
+    , writer.buffered());
+}
+
+test "deserialize enum in sequence" {
+    const Color = enum { red, green, blue };
+    const Data = struct { colors: []const Color };
+    const serde = Serde(Data);
+    var result = try serde.deserialize(std.testing.allocator,
+        \\colors:
+        \\  - red
+        \\  - blue
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 2), result.value.colors.len);
+    try std.testing.expectEqual(Color.red, result.value.colors[0]);
+    try std.testing.expectEqual(Color.blue, result.value.colors[1]);
+}
+
+test "error: invalid enum value" {
+    const Status = enum { active, inactive };
+    const Data = struct { status: Status };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator, "status: unknown\n");
+    try std.testing.expectError(error.UnexpectedToken, result);
 }

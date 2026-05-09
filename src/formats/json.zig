@@ -66,6 +66,7 @@ pub fn Serde(comptime T: type) type {
                     }
                     try writer.writeByte('}');
                 },
+                .@"enum" => try writeString(writer, @tagName(value)),
                 else => @compileError("unsupported type: " ++ @typeName(T)),
             }
         }
@@ -198,6 +199,19 @@ pub fn Serde(comptime T: type) type {
                         }
                     }
                     return result;
+                },
+                .@"enum" => |enum_info| {
+                    const str = switch (try scanner.nextAlloc(allocator, .alloc_if_needed)) {
+                        .string => |s| s,
+                        .allocated_string => |s| s,
+                        else => return error.UnexpectedToken,
+                    };
+                    inline for (enum_info.fields) |field| {
+                        if (std.mem.eql(u8, field.name, str)) {
+                            return @enumFromInt(field.value);
+                        }
+                    }
+                    return error.UnexpectedToken;
                 },
                 else => @compileError("unsupported type: " ++ @typeName(T)),
             }
@@ -561,4 +575,53 @@ test "roundtrip: fixed-size u8 array" {
     defer restored.deinit();
 
     try std.testing.expectEqualSlices(u8, &original.name, &restored.value.name);
+}
+
+test "serialize enum" {
+    const Status = enum { active, inactive };
+    const Data = struct { status: Status };
+    const serde = Serde(Data);
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, Data{ .status = .active });
+    try std.testing.expectEqualStrings(
+        \\{"status":"active"}
+    , writer.buffered());
+}
+
+test "deserialize enum" {
+    const Status = enum { active, inactive };
+    const Data = struct { status: Status };
+    const serde = Serde(Data);
+    var result = try serde.deserialize(std.testing.allocator,
+        \\{"status":"inactive"}
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(Status.inactive, result.value.status);
+}
+
+test "roundtrip: enum" {
+    const Color = enum { red, green, blue };
+    const Data = struct { color: Color };
+    const serde = Serde(Data);
+    const original = Data{ .color = .green };
+
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+
+    try std.testing.expectEqual(original.color, restored.value.color);
+}
+
+test "error: invalid enum value" {
+    const Status = enum { active, inactive };
+    const Data = struct { status: Status };
+    const serde = Serde(Data);
+    const result = serde.deserialize(std.testing.allocator,
+        \\{"status":"unknown"}
+    );
+    try std.testing.expectError(error.UnexpectedToken, result);
 }
