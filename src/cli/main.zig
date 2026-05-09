@@ -2,9 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const structargs = @import("zigcli").structargs;
-const infer_json = @import("infer_json.zig");
-const infer_toml = @import("infer_toml.zig");
-const infer_yaml = @import("infer_yaml.zig");
+const infer_adapters = @import("adapters.zig");
 
 const version_string = std.fmt.comptimePrint(
     \\serde-gen
@@ -23,10 +21,8 @@ const version_string = std.fmt.comptimePrint(
     @tagName(builtin.zig_backend),
 });
 
-const Format = enum { json, toml, yaml };
-
 const Options = struct {
-    format: ?Format = null,
+    format: ?infer_adapters.InputFormat = null,
     @"root-name": []const u8 = "Root",
     help: bool = false,
     version: bool = false,
@@ -66,11 +62,9 @@ pub fn main(init: std.process.Init) !void {
         std.process.fatal("missing input file. Use --help for usage.", .{});
     };
 
-    const format = result.options.format orelse detectFormat(file_path) orelse {
+    const format = result.options.format orelse infer_adapters.detectFormat(file_path) orelse {
         std.process.fatal("cannot detect format from extension. Use --format to specify.", .{});
     };
-
-    const generator = selectGenerator(format);
 
     const content = std.Io.Dir.cwd().readFileAlloc(
         io,
@@ -82,7 +76,7 @@ pub fn main(init: std.process.Init) !void {
     };
     defer allocator.free(content);
 
-    const raw_output = generator(allocator, content) catch {
+    const raw_output = infer_adapters.generate(allocator, format, content) catch {
         std.process.fatal("failed to generate struct definitions", .{});
     };
     defer allocator.free(raw_output);
@@ -95,16 +89,6 @@ pub fn main(init: std.process.Init) !void {
     defer if (!std.mem.eql(u8, root_name, "Root")) allocator.free(output);
 
     try std.Io.File.stdout().writeStreamingAll(io, output);
-}
-
-const GenerateFn = *const fn (std.mem.Allocator, []const u8) anyerror![]const u8;
-
-fn selectGenerator(format: Format) GenerateFn {
-    return switch (format) {
-        .json => &infer_json.generate,
-        .toml => &infer_toml.generate,
-        .yaml => &infer_yaml.generate,
-    };
 }
 
 fn renameRoot(allocator: std.mem.Allocator, source: []const u8, name: []const u8) ![]const u8 {
@@ -124,14 +108,6 @@ fn renameRoot(allocator: std.mem.Allocator, source: []const u8, name: []const u8
     try result.appendSlice(allocator, source[pos..]);
 
     return try result.toOwnedSlice(allocator);
-}
-
-fn detectFormat(path: []const u8) ?Format {
-    const ext = std.fs.path.extension(path);
-    if (std.mem.eql(u8, ext, ".json")) return .json;
-    if (std.mem.eql(u8, ext, ".toml")) return .toml;
-    if (std.mem.eql(u8, ext, ".yaml") or std.mem.eql(u8, ext, ".yml")) return .yaml;
-    return null;
 }
 
 test {

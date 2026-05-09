@@ -23,6 +23,14 @@ Define your struct once, automatically serialize/deserialize across JSON, TOML, 
 
 Requires **Zig 0.16.0**.
 
+## Architecture
+
+- `src/core.zig` — stable contracts (`Format`, `Parsed`, `Serde`, adapter capabilities).
+- `src/adapters/formats.zig` — serialization adapters (`json`, `toml`, `yaml`, `protobuf`) mapped to core contracts.
+- `src/formats/*.zig` — concrete format implementations.
+- `src/cli/adapters.zig` — CLI inference adapter selection (`json`, `toml`, `yaml`) and format detection.
+- `src/cli/infer_*.zig` — concrete schema inference adapters.
+
 ## Usage
 
 ```zig
