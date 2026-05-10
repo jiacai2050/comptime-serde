@@ -1,3 +1,19 @@
+//! comptime-serde — compile-time serialization and deserialization for Zig.
+//!
+//! ```text
+//!                           ┌─────────────┐
+//!                           │  Zig Struct │
+//!                           └──────┬──────┘
+//!                                  │
+//!                       Serde(format, T)
+//!                                  │
+//!             ┌────────┬───────────┼───────────┬──────────┐
+//!             ▼        ▼           ▼           ▼          ▼
+//!         ┌──────┐ ┌──────┐  ┌────────┐  ┌────────┐ ┌──────────┐
+//!         │ JSON │ │ TOML │  │  YAML  │  │Protobuf│ │  ...     │
+//!         └──────┘ └──────┘  └────────┘  └────────┘ └──────────┘
+//! ```
+
 const std = @import("std");
 pub const json = @import("formats/json.zig");
 pub const toml = @import("formats/toml.zig");

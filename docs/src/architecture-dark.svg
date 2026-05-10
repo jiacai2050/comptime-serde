@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 320" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7a41d"/>
+      <stop offset="100%" stop-color="#e08c00"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a90d9"/>
+      <stop offset="100%" stop-color="#357abd"/>
+    </linearGradient>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="116%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Zig Struct -->
+  <rect x="240" y="16" width="160" height="48" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="320" y="46" text-anchor="middle" fill="#fff" font-weight="700" font-size="16">Zig Struct</text>
+
+  <!-- Arrow down -->
+  <line x1="320" y1="64" x2="320" y2="100" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/></marker></defs>
+
+  <!-- Serde(format, T) -->
+  <rect x="220" y="100" width="200" height="44" rx="8" fill="url(#g2)" filter="url(#shadow)"/>
+  <text x="320" y="128" text-anchor="middle" fill="#fff" font-weight="700" font-size="15">Serde(format, T)</text>
+
+  <!-- Arrows to formats -->
+  <line x1="320" y1="144" x2="92" y2="200" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="320" y1="144" x2="244" y2="200" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="320" y1="144" x2="396" y2="200" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="320" y1="144" x2="548" y2="200" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Format boxes -->
+  <rect x="32" y="200" width="120" height="44" rx="8" fill="#1e1e1e" stroke="#444" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="92" y="228" text-anchor="middle" fill="#e0e0e0" font-weight="600" font-size="15">JSON</text>
+
+  <rect x="184" y="200" width="120" height="44" rx="8" fill="#1e1e1e" stroke="#444" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="244" y="228" text-anchor="middle" fill="#e0e0e0" font-weight="600" font-size="15">TOML</text>
+
+  <rect x="336" y="200" width="120" height="44" rx="8" fill="#1e1e1e" stroke="#444" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="396" y="228" text-anchor="middle" fill="#e0e0e0" font-weight="600" font-size="15">YAML</text>
+
+  <rect x="488" y="200" width="120" height="44" rx="8" fill="#1e1e1e" stroke="#444" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="548" y="228" text-anchor="middle" fill="#e0e0e0" font-weight="600" font-size="15">Protobuf</text>
+
+  <!-- comptime label -->
+  <text x="320" y="290" text-anchor="middle" fill="#888" font-size="12" font-style="italic">all dispatch at comptime via @typeInfo — zero runtime overhead</text>
+</svg>

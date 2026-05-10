@@ -7,20 +7,10 @@
 
 Define your struct once, automatically serialize/deserialize across JSON, TOML, YAML, and Protobuf — zero runtime overhead, all type dispatch happens at comptime via `@typeInfo`.
 
-
-```
-                          ┌─────────────┐
-                          │  Zig Struct │
-                          └──────┬──────┘
-                                 │
-                      Serde(format, T)
-                                 │
-            ┌────────┬───────────┼───────────┬──────────┐
-            ▼        ▼           ▼           ▼          ▼
-        ┌──────┐ ┌──────┐  ┌────────┐  ┌────────┐ ┌──────────┐
-        │ JSON │ │ TOML │  │  YAML  │  │Protobuf│ │  ...     │
-        └──────┘ └──────┘  └────────┘  └────────┘ └──────────┘
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./architecture-dark.svg">
+  <img alt="comptime-serde architecture" src="./architecture.svg" width="640">
+</picture>
 
 ## Features
 
