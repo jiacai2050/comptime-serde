@@ -40,13 +40,13 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
             // Pass 1: write key-value pairs (primitives, strings, inline arrays).
             inline for (struct_info.fields) |field| {
                 const config = common.fieldConfig(.toml, T, field.name);
+                const field_key = common.serializedFieldName(.toml, T, field.name);
                 const field_value = @field(value, field.name);
                 var include_field = !config.skip;
                 if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
                     include_field = false;
                 }
                 if (include_field) {
-                    const field_key = common.serializedFieldName(.toml, T, field.name);
                     const field_type_info = @typeInfo(field.type);
                     switch (field_type_info) {
                         .@"struct" => {}, // handled in pass 2
@@ -71,13 +71,13 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
             // Pass 2: write [table] and [[array]] sections.
             inline for (struct_info.fields) |field| {
                 const config = common.fieldConfig(.toml, T, field.name);
+                const field_key = common.serializedFieldName(.toml, T, field.name);
                 const field_value = @field(value, field.name);
                 var include_field = !config.skip;
                 if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
                     include_field = false;
                 }
                 if (include_field) {
-                    const field_key = common.serializedFieldName(.toml, T, field.name);
                     const field_type_info = @typeInfo(field.type);
                     switch (field_type_info) {
                         .@"struct" => {
