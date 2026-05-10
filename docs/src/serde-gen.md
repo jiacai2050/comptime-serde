@@ -247,5 +247,5 @@ echo '{"x":1,"y":2}' | serde-gen --format json -
 - **No `oneof`, `map`, `service`, `extend`, or `reserved`** declarations. These lines are silently skipped.
 - **No imports** — all types must be defined in the same file.
 - **Forward references** — a type must be defined before it is referenced. If `message A` references `message B` but `B` is defined later in the file, the generated Zig will have a compile error.
-- **Field options** (`[deprecated = true]`, etc.) are parsed but ignored in the output.
+- **Field options** (`[deprecated = true]`, etc.) are recognized and ignored in the output.
 - **Enum values are lowercased** — proto convention `STATUS_ACTIVE` becomes Zig `status_active`.
