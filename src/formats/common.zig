@@ -358,6 +358,28 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
     }
 }
 
+/// Writes `string` as a double-quoted JSON/TOML string with standard escapes.
+pub fn writeEscapedString(writer: *std.Io.Writer, string: []const u8) !void {
+    try writer.writeByte('"');
+    for (string) |char| {
+        switch (char) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (char < 0x20) {
+                    try writer.print("\\u{x:0>4}", .{char});
+                } else {
+                    try writer.writeByte(char);
+                }
+            },
+        }
+    }
+    try writer.writeByte('"');
+}
+
 /// Returns true if `field_name` should be included in serialized output:
 /// not skipped, and not omitted when the value is null.
 pub fn shouldIncludeField(comptime format: Format, comptime T: type, comptime field_name: []const u8, field_value: anytype) bool {

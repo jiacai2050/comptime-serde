@@ -198,24 +198,7 @@ fn writeString(writer: *std.Io.Writer, string: []const u8) !void {
         try writer.writeAll("\"\"\"");
         return;
     }
-    try writer.writeByte('"');
-    for (string) |char| {
-        switch (char) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            else => {
-                if (char < 0x20) {
-                    try writer.print("\\u{x:0>4}", .{char});
-                } else {
-                    try writer.writeByte(char);
-                }
-            },
-        }
-    }
-    try writer.writeByte('"');
+    try common.writeEscapedString(writer, string);
 }
 
 fn writeInlineArray(writer: *std.Io.Writer, slice: anytype) !void {

@@ -15,7 +15,7 @@ pub fn Serde(comptime T: type) type {
                 .float => try writer.print("{}", .{value}),
                 .pointer => |pointer_info| {
                     if (pointer_info.size == .slice and pointer_info.child == u8) {
-                        try writeString(writer, value);
+                        try common.writeEscapedString(writer, value);
                     } else if (pointer_info.size == .slice) {
                         try writer.writeByte('[');
                         const ItemSerializer = Serde(pointer_info.child);
@@ -27,7 +27,7 @@ pub fn Serde(comptime T: type) type {
                     } else if (pointer_info.size == .one) {
                         const child = @typeInfo(pointer_info.child);
                         if (child == .array and child.array.child == u8) {
-                            try writeString(writer, @as([]const u8, value));
+                            try common.writeEscapedString(writer, @as([]const u8, value));
                         } else {
                             @compileError("unsupported pointer type: " ++ @typeName(T));
                         }
@@ -37,7 +37,7 @@ pub fn Serde(comptime T: type) type {
                 },
                 .array => |array_info| {
                     if (array_info.child == u8) {
-                        try writeString(writer, &value);
+                        try common.writeEscapedString(writer, &value);
                     } else {
                         const ItemSerializer = Serde(array_info.child);
                         try writer.writeByte('[');
@@ -64,7 +64,7 @@ pub fn Serde(comptime T: type) type {
                         if (common.shouldIncludeField(.json, T, field.name, field_value)) {
                             if (!first) try writer.writeByte(',');
                             first = false;
-                            try writeString(writer, common.serializedFieldName(.json, T, field.name));
+                            try common.writeEscapedString(writer, common.serializedFieldName(.json, T, field.name));
                             try writer.writeByte(':');
                             const FieldSerializer = Serde(field.type);
                             try FieldSerializer.serialize(writer, field_value);
@@ -72,7 +72,7 @@ pub fn Serde(comptime T: type) type {
                     }
                     try writer.writeByte('}');
                 },
-                .@"enum" => try writeString(writer, @tagName(value)),
+                .@"enum" => try common.writeEscapedString(writer, @tagName(value)),
                 else => @compileError("unsupported type: " ++ @typeName(T)),
             }
         }
@@ -220,27 +220,6 @@ pub fn Serde(comptime T: type) type {
             }
         }
     };
-}
-
-fn writeString(writer: *std.Io.Writer, string: []const u8) !void {
-    try writer.writeByte('"');
-    for (string) |char| {
-        switch (char) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            else => {
-                if (char < 0x20) {
-                    try writer.print("\\u{x:0>4}", .{char});
-                } else {
-                    try writer.writeByte(char);
-                }
-            },
-        }
-    }
-    try writer.writeByte('"');
 }
 
 test "serialize bool" {

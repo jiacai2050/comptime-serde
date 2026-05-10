@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common.zig");
 
 const ProtoDef = union(enum) {
     message: MessageDef,
@@ -177,13 +178,13 @@ fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .sc
 }
 
 fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
-    var tokens = std.mem.tokenizeAny(u8, line, " \t");
-    var parts: [5][]const u8 = undefined;
+    var tokenizer = std.mem.tokenizeAny(u8, line, " \t");
+    var tokens: [5][]const u8 = undefined;
     var count: usize = 0;
 
-    while (tokens.next()) |token| {
+    while (tokenizer.next()) |token| {
         if (count >= 5) break;
-        parts[count] = token;
+        tokens[count] = token;
         count += 1;
     }
 
@@ -192,15 +193,15 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
     var is_repeated = false;
     var type_offset: usize = 0;
 
-    if (std.mem.eql(u8, parts[0], "repeated")) {
+    if (std.mem.eql(u8, tokens[0], "repeated")) {
         is_repeated = true;
         type_offset = 1;
     }
 
     if (type_offset + 2 > count) return null;
 
-    const proto_type = parts[type_offset];
-    var field_name = parts[type_offset + 1];
+    const proto_type = tokens[type_offset];
+    var field_name = tokens[type_offset + 1];
 
     // Strip trailing semicolon
     if (field_name.len > 0 and field_name[field_name.len - 1] == ';') {
@@ -214,7 +215,7 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
 
     // Extract field number from "= N" or "=N;"
     if (type_offset + 3 >= count) return null;
-    var number_str = parts[type_offset + 3];
+    var number_str = tokens[type_offset + 3];
     // Strip trailing semicolon
     if (number_str.len > 0 and number_str[number_str.len - 1] == ';') {
         number_str = number_str[0 .. number_str.len - 1];
@@ -232,26 +233,26 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
 }
 
 fn parseEnumValueLine(allocator: std.mem.Allocator, line: []const u8) ?EnumValueDef {
-    var tokens = std.mem.tokenizeAny(u8, line, " \t");
-    var parts: [3][]const u8 = undefined;
+    var tokenizer = std.mem.tokenizeAny(u8, line, " \t");
+    var tokens: [3][]const u8 = undefined;
     var count: usize = 0;
 
-    while (tokens.next()) |token| {
+    while (tokenizer.next()) |token| {
         if (count >= 3) break;
-        parts[count] = token;
+        tokens[count] = token;
         count += 1;
     }
 
     if (count < 3) return null;
 
-    var value_name = parts[0];
+    var value_name = tokens[0];
     // Strip trailing semicolon from name (e.g. "UNKNOWN;" from "UNKNOWN = 0;")
     if (value_name.len > 0 and value_name[value_name.len - 1] == ';') {
         value_name = value_name[0 .. value_name.len - 1];
     }
 
-    // parts[1] should be "="
-    var number_str = parts[2];
+    // tokens[1] should be "="
+    var number_str = tokens[2];
     if (number_str.len > 0 and number_str[number_str.len - 1] == ';') {
         number_str = number_str[0 .. number_str.len - 1];
     }
@@ -295,12 +296,12 @@ fn mapScalarType(proto_type: []const u8) ?[]const u8 {
 fn flattenDefs(allocator: std.mem.Allocator, defs: []const ProtoDef, output: *std.ArrayList(ProtoDef)) !void {
     for (defs) |def| {
         switch (def) {
-            .message => |msg| {
+            .message => |message| {
                 // Hoist nested definitions before the parent
-                try flattenDefs(allocator, msg.nested.items, output);
+                try flattenDefs(allocator, message.nested.items, output);
                 try output.append(allocator, .{ .message = .{
-                    .name = msg.name,
-                    .fields = msg.fields,
+                    .name = message.name,
+                    .fields = message.fields,
                     .nested = std.ArrayList(ProtoDef).empty,
                 } });
             },
@@ -316,7 +317,7 @@ fn renderDefs(caller_alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, d
 
     for (defs) |def| {
         switch (def) {
-            .message => |msg| try renderMessage(arena_alloc, &output, msg),
+            .message => |message| try renderMessage(arena_alloc, &output, message),
             .enum_def => |enum_def| try renderEnum(arena_alloc, &output, enum_def),
         }
     }
@@ -329,24 +330,24 @@ fn renderDefs(caller_alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, d
     return try caller_alloc.dupe(u8, output.items);
 }
 
-fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), msg: MessageDef) !void {
-    const formatted_name = try formatName(arena_alloc, msg.name);
+fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), message: MessageDef) !void {
+    const formatted_name = try common.formatName(arena_alloc, message.name);
     const header = try std.fmt.allocPrint(arena_alloc, "const {s} = struct {{\n", .{formatted_name});
     try output.appendSlice(arena_alloc, header);
 
-    for (msg.fields.items) |field| {
-        const formatted_field = try formatName(arena_alloc, field.name);
+    for (message.fields.items) |field| {
+        const formatted_field = try common.formatName(arena_alloc, field.name);
         const line = try std.fmt.allocPrint(arena_alloc, "    {s}: {s},\n", .{ formatted_field, field.type_name });
         try output.appendSlice(arena_alloc, line);
     }
 
     // Render serde_fields with protobuf field numbers
-    if (msg.fields.items.len == 0) {
+    if (message.fields.items.len == 0) {
         try output.appendSlice(arena_alloc, "    pub const serde_fields = .{};\n");
     } else {
         try output.appendSlice(arena_alloc, "    pub const serde_fields = .{\n");
-        for (msg.fields.items) |field| {
-            const formatted_field = try formatName(arena_alloc, field.name);
+        for (message.fields.items) |field| {
+            const formatted_field = try common.formatName(arena_alloc, field.name);
             const entry = try std.fmt.allocPrint(
                 arena_alloc,
                 "        .{s} = .{{ .protobuf = .{{ .field_number = {d} }} }},\n",
@@ -360,36 +361,16 @@ fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), msg
 }
 
 fn renderEnum(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), enum_def: EnumDef) !void {
-    const formatted_name = try formatName(arena_alloc, enum_def.name);
+    const formatted_name = try common.formatName(arena_alloc, enum_def.name);
     const header = try std.fmt.allocPrint(arena_alloc, "const {s} = enum(u32) {{\n", .{formatted_name});
     try output.appendSlice(arena_alloc, header);
 
     for (enum_def.values.items) |value| {
-        const formatted_value = try formatName(arena_alloc, value.name);
+        const formatted_value = try common.formatName(arena_alloc, value.name);
         const line = try std.fmt.allocPrint(arena_alloc, "    {s} = {d},\n", .{ formatted_value, value.number });
         try output.appendSlice(arena_alloc, line);
     }
     try output.appendSlice(arena_alloc, "};\n\n");
-}
-
-fn needsQuoting(name: []const u8) bool {
-    if (name.len == 0) return true;
-    if (name[0] >= '0' and name[0] <= '9') return true;
-    for (name) |char| {
-        const is_alnum = (char >= 'a' and char <= 'z') or
-            (char >= 'A' and char <= 'Z') or
-            (char >= '0' and char <= '9') or
-            char == '_';
-        if (!is_alnum) return true;
-    }
-    return false;
-}
-
-fn formatName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    if (needsQuoting(name)) {
-        return try std.fmt.allocPrint(allocator, "@\"{s}\"", .{name});
-    }
-    return name;
 }
 
 fn toLowercase(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {

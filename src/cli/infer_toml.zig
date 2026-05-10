@@ -1,14 +1,7 @@
 const std = @import("std");
-
-const StructDef = struct {
-    name: []const u8,
-    fields: std.ArrayList(FieldDef),
-};
-
-const FieldDef = struct {
-    name: []const u8,
-    type_name: []const u8,
-};
+const common = @import("common.zig");
+const StructDef = common.StructDef;
+const FieldDef = common.FieldDef;
 
 /// Infers Zig struct definitions from TOML content.
 /// Returns the generated source code as a string.
@@ -21,7 +14,7 @@ pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     var lines = std.mem.splitScalar(u8, content, '\n');
     try parseTopLevel(arena_alloc, &lines, "Root", &structs);
 
-    return try renderStructs(allocator, arena_alloc, structs.items);
+    return try common.renderStructs(allocator, arena_alloc, structs.items);
 }
 
 fn parseTopLevel(
@@ -40,7 +33,7 @@ fn parseTopLevel(
             if (line.len > 2 and line[1] == '[') {
                 // [[array]] — array of tables.
                 const raw_name = extractName(line, 2, line.len - 2);
-                const struct_name = try capitalizeFirst(allocator, raw_name);
+                const struct_name = try common.capitalizeFirst(allocator, raw_name);
                 try parseTableInto(allocator, lines, struct_name, structs);
                 if (!hasField(root_fields.items, raw_name)) {
                     const type_name = try std.fmt.allocPrint(
@@ -56,7 +49,7 @@ fn parseTopLevel(
             } else {
                 // [table] — nested struct.
                 const raw_name = extractName(line, 1, line.len - 1);
-                const struct_name = try capitalizeFirst(allocator, raw_name);
+                const struct_name = try common.capitalizeFirst(allocator, raw_name);
                 try parseTableInto(allocator, lines, struct_name, structs);
                 if (!hasField(root_fields.items, raw_name)) {
                     try root_fields.append(allocator, .{
@@ -159,108 +152,15 @@ fn inferValueType(value: []const u8) []const u8 {
     if (value[0] == '[') return "[]const []const u8";
 
     // Try integer.
-    if (isInteger(value)) return "i64";
+    if (common.isInteger(value)) return "i64";
     // Try float.
-    if (isFloat(value)) return "f64";
+    if (common.isFloat(value)) return "f64";
 
     return "[]const u8";
 }
 
-fn isInteger(value: []const u8) bool {
-    var start: usize = 0;
-    if (value.len > 0 and (value[0] == '-' or value[0] == '+')) start = 1;
-    if (start >= value.len) return false;
-    for (value[start..]) |char| {
-        if (char < '0' or char > '9') return false;
-    }
-    return true;
-}
-
-fn isFloat(value: []const u8) bool {
-    var has_dot = false;
-    var start: usize = 0;
-    if (value.len > 0 and (value[0] == '-' or value[0] == '+')) start = 1;
-    if (start >= value.len) return false;
-    for (value[start..]) |char| {
-        if (char == '.') {
-            if (has_dot) return false;
-            has_dot = true;
-        } else if (char < '0' or char > '9') {
-            return false;
-        }
-    }
-    return has_dot;
-}
-
 fn extractName(line: []const u8, start: usize, end: usize) []const u8 {
     return std.mem.trim(u8, line[start..end], " ");
-}
-
-fn renderStructs(
-    caller_alloc: std.mem.Allocator,
-    arena_alloc: std.mem.Allocator,
-    structs: []const StructDef,
-) ![]const u8 {
-    var output = std.ArrayList(u8).empty;
-
-    for (structs) |struct_def| {
-        const capitalized = capitalizeFirst(arena_alloc, struct_def.name) catch struct_def.name;
-        const formatted_name = formatName(arena_alloc, capitalized) catch capitalized;
-        const header = try std.fmt.allocPrint(
-            arena_alloc,
-            "const {s} = struct {{\n",
-            .{formatted_name},
-        );
-        try output.appendSlice(arena_alloc, header);
-
-        for (struct_def.fields.items) |field| {
-            const formatted_field = formatName(arena_alloc, field.name) catch field.name;
-            const line = try std.fmt.allocPrint(
-                arena_alloc,
-                "    {s}: {s},\n",
-                .{ formatted_field, field.type_name },
-            );
-            try output.appendSlice(arena_alloc, line);
-        }
-        try output.appendSlice(arena_alloc, "};\n\n");
-    }
-
-    while (output.items.len > 0 and output.items[output.items.len - 1] == '\n') {
-        output.items.len -= 1;
-    }
-    try output.append(arena_alloc, '\n');
-
-    return try caller_alloc.dupe(u8, output.items);
-}
-
-fn needsQuoting(name: []const u8) bool {
-    if (name.len == 0) return true;
-    if (name[0] >= '0' and name[0] <= '9') return true;
-    for (name) |char| {
-        const is_alnum = (char >= 'a' and char <= 'z') or
-            (char >= 'A' and char <= 'Z') or
-            (char >= '0' and char <= '9') or
-            char == '_';
-        if (!is_alnum) return true;
-    }
-    return false;
-}
-
-fn formatName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    if (needsQuoting(name)) {
-        return try std.fmt.allocPrint(allocator, "@\"{s}\"", .{name});
-    }
-    return name;
-}
-
-fn capitalizeFirst(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    if (name.len == 0) return name;
-    if (name[0] >= 'a' and name[0] <= 'z') {
-        const result = try allocator.dupe(u8, name);
-        result[0] -= 32;
-        return result;
-    }
-    return name;
 }
 
 // ==================== Tests ====================
