@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
-const StructDef = common.StructDef;
-const FieldDef = common.FieldDef;
+const StructDefinition = common.StructDefinition;
+const FieldDefinition = common.FieldDefinition;
 
 /// Infers Zig struct definitions from TOML content.
 /// Returns the generated source code as a string.
@@ -10,7 +10,7 @@ pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    var structs = std.ArrayList(StructDef).empty;
+    var structs = std.ArrayList(StructDefinition).empty;
     var lines = std.mem.splitScalar(u8, content, '\n');
     try parseTopLevel(arena_alloc, &lines, "Root", &structs);
 
@@ -21,9 +21,9 @@ fn parseTopLevel(
     allocator: std.mem.Allocator,
     lines: *std.mem.SplitIterator(u8, .scalar),
     name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) !void {
-    var root_fields = std.ArrayList(FieldDef).empty;
+    var root_fields = std.ArrayList(FieldDefinition).empty;
 
     while (lines.next()) |raw_line| {
         const line = std.mem.trim(u8, raw_line, " \r");
@@ -76,7 +76,7 @@ fn parseTableInto(
     allocator: std.mem.Allocator,
     lines: *std.mem.SplitIterator(u8, .scalar),
     name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) !void {
     // Check if we already have this struct defined (from a previous [[array]] entry).
     // Still need to consume the lines belonging to this section.
@@ -87,7 +87,7 @@ fn parseTableInto(
         }
     }
 
-    var fields = std.ArrayList(FieldDef).empty;
+    var fields = std.ArrayList(FieldDefinition).empty;
 
     while (lines.peek()) |raw_line| {
         const line = std.mem.trim(u8, raw_line, " \r");
@@ -121,7 +121,7 @@ fn skipSection(lines: *std.mem.SplitIterator(u8, .scalar)) void {
     }
 }
 
-fn hasField(fields: []const FieldDef, name: []const u8) bool {
+fn hasField(fields: []const FieldDefinition, name: []const u8) bool {
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, name)) return true;
     }

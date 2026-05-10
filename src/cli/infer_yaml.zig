@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
-const StructDef = common.StructDef;
-const FieldDef = common.FieldDef;
+const StructDefinition = common.StructDefinition;
+const FieldDefinition = common.FieldDefinition;
 
 /// Infers Zig struct definitions from YAML content.
 /// Returns the generated source code as a string.
@@ -10,7 +10,7 @@ pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    var structs = std.ArrayList(StructDef).empty;
+    var structs = std.ArrayList(StructDefinition).empty;
     const all_lines = try splitLines(arena_alloc, content);
 
     var pos: usize = 0;
@@ -41,9 +41,9 @@ fn parseMapping(
     pos: *usize,
     base_indent: usize,
     name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) InferError!void {
-    var fields = std.ArrayList(FieldDef).empty;
+    var fields = std.ArrayList(FieldDefinition).empty;
 
     while (pos.* < all_lines.len) {
         const line = all_lines[pos.*];
@@ -90,7 +90,7 @@ fn inferFieldType(
     parent_indent: usize,
     inline_value: []const u8,
     field_name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) InferError![]const u8 {
     // Nested struct: empty inline value + indented content below.
     if (inline_value.len == 0) {
@@ -133,7 +133,7 @@ fn inferSequenceType(
     pos: *usize,
     parent_indent: usize,
     field_name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) ![]const u8 {
     const seq_indent = parent_indent + 2;
 
@@ -177,7 +177,7 @@ fn parseSequenceItemStruct(
     pos: *usize,
     seq_indent: usize,
     name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) !void {
     // Check if already defined.
     for (structs.items) |s| {
@@ -187,7 +187,7 @@ fn parseSequenceItemStruct(
         }
     }
 
-    var fields = std.ArrayList(FieldDef).empty;
+    var fields = std.ArrayList(FieldDefinition).empty;
 
     // Parse first item.
     if (pos.* < all_lines.len) {

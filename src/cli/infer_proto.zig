@@ -1,30 +1,30 @@
 const std = @import("std");
 const common = @import("common.zig");
 
-const ProtoDef = union(enum) {
-    message: MessageDef,
-    enum_def: EnumDef,
+const ProtoDefinition = union(enum) {
+    message: MessageDefinition,
+    enum_definition: EnumDefinition,
 };
 
-const MessageDef = struct {
+const MessageDefinition = struct {
     name: []const u8,
-    fields: std.ArrayList(FieldDef),
-    nested: std.ArrayList(ProtoDef),
+    fields: std.ArrayList(FieldDefinition),
+    nested: std.ArrayList(ProtoDefinition),
 };
 
-const EnumDef = struct {
+const EnumDefinition = struct {
     name: []const u8,
-    values: std.ArrayList(EnumValueDef),
+    values: std.ArrayList(EnumValueDefinition),
 };
 
-const FieldDef = struct {
+const FieldDefinition = struct {
     name: []const u8,
     type_name: []const u8,
     field_number: u32,
     is_repeated: bool,
 };
 
-const EnumValueDef = struct {
+const EnumValueDefinition = struct {
     name: []const u8,
     number: u32,
 };
@@ -36,7 +36,7 @@ pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    var defs = std.ArrayList(ProtoDef).empty;
+    var definitions = std.ArrayList(ProtoDefinition).empty;
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |raw_line| {
         const line = stripComment(raw_line);
@@ -46,18 +46,18 @@ pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
         if (isSkippableLine(trimmed)) continue;
 
         if (std.mem.startsWith(u8, trimmed, "message ")) {
-            const def = try parseMessage(arena_alloc, &lines, trimmed);
-            try defs.append(arena_alloc, def);
+            const definition = try parseMessage(arena_alloc, &lines, trimmed);
+            try definitions.append(arena_alloc, definition);
         } else if (std.mem.startsWith(u8, trimmed, "enum ")) {
-            const def = try parseEnum(arena_alloc, &lines, trimmed);
-            try defs.append(arena_alloc, def);
+            const definition = try parseEnum(arena_alloc, &lines, trimmed);
+            try definitions.append(arena_alloc, definition);
         }
     }
 
-    var flat = std.ArrayList(ProtoDef).empty;
-    try flattenDefs(arena_alloc, defs.items, &flat);
+    var flat = std.ArrayList(ProtoDefinition).empty;
+    try flattenDefinitions(arena_alloc, definitions.items, &flat);
 
-    return try renderDefs(allocator, arena_alloc, flat.items);
+    return try renderDefinitions(allocator, arena_alloc, flat.items);
 }
 
 fn isSkippableLine(line: []const u8) bool {
@@ -90,11 +90,11 @@ fn extractNameFromDecl(line: []const u8, keyword: []const u8) ?[]const u8 {
     return std.mem.trim(u8, after_keyword[0..end], " ");
 }
 
-fn parseMessage(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .scalar), first_line: []const u8) !ProtoDef {
+fn parseMessage(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .scalar), first_line: []const u8) !ProtoDefinition {
     const name = extractNameFromDecl(first_line, "message") orelse "UnnamedMessage";
 
-    var fields = std.ArrayList(FieldDef).empty;
-    var nested = std.ArrayList(ProtoDef).empty;
+    var fields = std.ArrayList(FieldDefinition).empty;
+    var nested = std.ArrayList(ProtoDefinition).empty;
 
     // Handle single-line message: message Foo {}
     if (std.mem.indexOfScalar(u8, first_line, '}') != null) {
@@ -118,15 +118,19 @@ fn parseMessage(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, 
             }
         }
 
-        // Check for nested message/enum
+        // Check for nested message/enum.
+        // The opening '{' was already counted above; the recursive call
+        // consumes the closing '}', so decrement brace_depth to stay in sync.
         if (std.mem.startsWith(u8, trimmed, "message ")) {
-            const nested_def = try parseMessage(allocator, lines, trimmed);
-            try nested.append(allocator, nested_def);
+            const nested_definition = try parseMessage(allocator, lines, trimmed);
+            try nested.append(allocator, nested_definition);
+            brace_depth -= 1;
             continue;
         }
         if (std.mem.startsWith(u8, trimmed, "enum ")) {
-            const nested_def = try parseEnum(allocator, lines, trimmed);
-            try nested.append(allocator, nested_def);
+            const nested_definition = try parseEnum(allocator, lines, trimmed);
+            try nested.append(allocator, nested_definition);
+            brace_depth -= 1;
             continue;
         }
 
@@ -143,14 +147,14 @@ fn parseMessage(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, 
     return .{ .message = .{ .name = name, .fields = fields, .nested = nested } };
 }
 
-fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .scalar), first_line: []const u8) !ProtoDef {
+fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .scalar), first_line: []const u8) !ProtoDefinition {
     const name = extractNameFromDecl(first_line, "enum") orelse "UnnamedEnum";
 
-    var values = std.ArrayList(EnumValueDef).empty;
+    var values = std.ArrayList(EnumValueDefinition).empty;
 
     // Handle single-line enum: enum Foo {}
     if (std.mem.indexOfScalar(u8, first_line, '}') != null) {
-        return .{ .enum_def = .{ .name = name, .values = values } };
+        return .{ .enum_definition = .{ .name = name, .values = values } };
     }
 
     var brace_depth: u32 = 1;
@@ -164,7 +168,7 @@ fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .sc
             if (char == '}') {
                 brace_depth -= 1;
                 if (brace_depth == 0) {
-                    return .{ .enum_def = .{ .name = name, .values = values } };
+                    return .{ .enum_definition = .{ .name = name, .values = values } };
                 }
             }
         }
@@ -174,10 +178,10 @@ fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .sc
         }
     }
 
-    return .{ .enum_def = .{ .name = name, .values = values } };
+    return .{ .enum_definition = .{ .name = name, .values = values } };
 }
 
-fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
+fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDefinition {
     // Tokenize on whitespace and structural characters so that
     // "string host=1;" and "string host = 1;" both parse correctly.
     var tokenizer = std.mem.tokenizeAny(u8, line, " \t=;[]{}");
@@ -217,7 +221,7 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
     };
 }
 
-fn parseEnumValueLine(allocator: std.mem.Allocator, line: []const u8) ?EnumValueDef {
+fn parseEnumValueLine(allocator: std.mem.Allocator, line: []const u8) ?EnumValueDefinition {
     // Tokenize on whitespace and structural characters so that
     // "UNKNOWN=0;" and "UNKNOWN = 0;" both parse correctly.
     var tokenizer = std.mem.tokenizeAny(u8, line, " \t=;[]{}");
@@ -271,32 +275,32 @@ fn mapScalarType(proto_type: []const u8) ?[]const u8 {
     return null;
 }
 
-fn flattenDefs(allocator: std.mem.Allocator, defs: []const ProtoDef, output: *std.ArrayList(ProtoDef)) !void {
-    for (defs) |def| {
-        switch (def) {
+fn flattenDefinitions(allocator: std.mem.Allocator, definitions: []const ProtoDefinition, output: *std.ArrayList(ProtoDefinition)) !void {
+    for (definitions) |definition| {
+        switch (definition) {
             .message => |message| {
                 // Hoist nested definitions before the parent
-                try flattenDefs(allocator, message.nested.items, output);
+                try flattenDefinitions(allocator, message.nested.items, output);
                 try output.append(allocator, .{ .message = .{
                     .name = message.name,
                     .fields = message.fields,
-                    .nested = std.ArrayList(ProtoDef).empty,
+                    .nested = std.ArrayList(ProtoDefinition).empty,
                 } });
             },
-            .enum_def => {
-                try output.append(allocator, def);
+            .enum_definition => {
+                try output.append(allocator, definition);
             },
         }
     }
 }
 
-fn renderDefs(caller_alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, defs: []const ProtoDef) ![]const u8 {
+fn renderDefinitions(caller_alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, definitions: []const ProtoDefinition) ![]const u8 {
     var output = std.ArrayList(u8).empty;
 
-    for (defs) |def| {
-        switch (def) {
+    for (definitions) |definition| {
+        switch (definition) {
             .message => |message| try renderMessage(arena_alloc, &output, message),
-            .enum_def => |enum_def| try renderEnum(arena_alloc, &output, enum_def),
+            .enum_definition => |enum_definition| try renderEnum(arena_alloc, &output, enum_definition),
         }
     }
 
@@ -308,7 +312,7 @@ fn renderDefs(caller_alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, d
     return try caller_alloc.dupe(u8, output.items);
 }
 
-fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), message: MessageDef) !void {
+fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), message: MessageDefinition) !void {
     const formatted_name = try common.formatName(arena_alloc, message.name);
     const header = try std.fmt.allocPrint(arena_alloc, "const {s} = struct {{\n", .{formatted_name});
     try output.appendSlice(arena_alloc, header);
@@ -338,12 +342,12 @@ fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), mes
     try output.appendSlice(arena_alloc, "};\n\n");
 }
 
-fn renderEnum(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), enum_def: EnumDef) !void {
-    const formatted_name = try common.formatName(arena_alloc, enum_def.name);
+fn renderEnum(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), enum_definition: EnumDefinition) !void {
+    const formatted_name = try common.formatName(arena_alloc, enum_definition.name);
     const header = try std.fmt.allocPrint(arena_alloc, "const {s} = enum(u32) {{\n", .{formatted_name});
     try output.appendSlice(arena_alloc, header);
 
-    for (enum_def.values.items) |value| {
+    for (enum_definition.values.items) |value| {
         const formatted_value = try common.formatName(arena_alloc, value.name);
         const line = try std.fmt.allocPrint(arena_alloc, "    {s} = {d},\n", .{ formatted_value, value.number });
         try output.appendSlice(arena_alloc, line);
@@ -535,6 +539,88 @@ test "nested message hoisted before parent" {
         \\    pub const serde_fields = .{
         \\        .inner = .{ .protobuf = .{ .field_number = 1 } },
         \\    };
+        \\};
+        \\
+    , output);
+}
+
+test "nested message with sibling field and nested enum" {
+    const output = try generate(std.testing.allocator,
+        \\syntax = "proto3";
+        \\
+        \\message Outer {
+        \\  message Inner {
+        \\    string name = 1;
+        \\  }
+        \\  Inner inner = 1;
+        \\  enum Kind {
+        \\    DEFAULT = 0;
+        \\    CUSTOM = 1;
+        \\  }
+        \\  Kind kind = 2;
+        \\}
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Inner = struct {
+        \\    name: []const u8,
+        \\    pub const serde_fields = .{
+        \\        .name = .{ .protobuf = .{ .field_number = 1 } },
+        \\    };
+        \\};
+        \\
+        \\const Kind = enum(u32) {
+        \\    default = 0,
+        \\    custom = 1,
+        \\};
+        \\
+        \\const Outer = struct {
+        \\    inner: Inner,
+        \\    kind: Kind,
+        \\    pub const serde_fields = .{
+        \\        .inner = .{ .protobuf = .{ .field_number = 1 } },
+        \\        .kind = .{ .protobuf = .{ .field_number = 2 } },
+        \\    };
+        \\};
+        \\
+    , output);
+}
+
+test "nested message does not consume following top-level definition" {
+    const output = try generate(std.testing.allocator,
+        \\syntax = "proto3";
+        \\
+        \\message Outer {
+        \\  message Inner {
+        \\    string name = 1;
+        \\  }
+        \\  string after = 1;
+        \\}
+        \\
+        \\enum Standalone {
+        \\  ZERO = 0;
+        \\  ONE = 1;
+        \\}
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Inner = struct {
+        \\    name: []const u8,
+        \\    pub const serde_fields = .{
+        \\        .name = .{ .protobuf = .{ .field_number = 1 } },
+        \\    };
+        \\};
+        \\
+        \\const Outer = struct {
+        \\    after: []const u8,
+        \\    pub const serde_fields = .{
+        \\        .after = .{ .protobuf = .{ .field_number = 1 } },
+        \\    };
+        \\};
+        \\
+        \\const Standalone = enum(u32) {
+        \\    zero = 0,
+        \\    one = 1,
         \\};
         \\
     , output);

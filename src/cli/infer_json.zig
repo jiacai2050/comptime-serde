@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
-const StructDef = common.StructDef;
-const FieldDef = common.FieldDef;
+const StructDefinition = common.StructDefinition;
+const FieldDefinition = common.FieldDefinition;
 
 /// Infers Zig struct definitions from JSON content.
 /// Returns the generated source code as a string.
@@ -12,7 +12,7 @@ pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
 
     const parsed = try std.json.parseFromSlice(std.json.Value, arena_alloc, content, .{});
 
-    var structs = std.ArrayList(StructDef).empty;
+    var structs = std.ArrayList(StructDefinition).empty;
     try inferObject(arena_alloc, parsed.value, "Root", &structs);
 
     return try common.renderStructs(allocator, arena_alloc, structs.items);
@@ -22,14 +22,14 @@ fn inferObject(
     allocator: std.mem.Allocator,
     value: std.json.Value,
     name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) !void {
     const object = switch (value) {
         .object => |obj| obj,
         else => return,
     };
 
-    var fields = std.ArrayList(FieldDef).empty;
+    var fields = std.ArrayList(FieldDefinition).empty;
 
     var iter = object.iterator();
     while (iter.next()) |entry| {
@@ -51,7 +51,7 @@ fn inferType(
     allocator: std.mem.Allocator,
     value: std.json.Value,
     field_name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) InferError![]const u8 {
     return switch (value) {
         .bool => "bool",
@@ -73,7 +73,7 @@ fn inferArrayType(
     allocator: std.mem.Allocator,
     array: std.json.Array,
     field_name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) InferError![]const u8 {
     if (array.items.len == 0) {
         return "[]const std.json.Value";

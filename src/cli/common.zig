@@ -1,11 +1,11 @@
 const std = @import("std");
 
-pub const StructDef = struct {
+pub const StructDefinition = struct {
     name: []const u8,
-    fields: std.ArrayList(FieldDef),
+    fields: std.ArrayList(FieldDefinition),
 };
 
-pub const FieldDef = struct {
+pub const FieldDefinition = struct {
     name: []const u8,
     type_name: []const u8,
 };
@@ -76,12 +76,12 @@ pub fn isFloat(value: []const u8) bool {
 pub fn renderStructs(
     caller_alloc: std.mem.Allocator,
     arena_alloc: std.mem.Allocator,
-    structs: []const StructDef,
+    structs: []const StructDefinition,
 ) ![]const u8 {
     var output = std.ArrayList(u8).empty;
 
-    for (structs) |struct_def| {
-        const capitalized = capitalizeFirst(arena_alloc, struct_def.name) catch struct_def.name;
+    for (structs) |struct_definition| {
+        const capitalized = capitalizeFirst(arena_alloc, struct_definition.name) catch struct_definition.name;
         const formatted_name = formatName(arena_alloc, capitalized) catch capitalized;
         const header = try std.fmt.allocPrint(
             arena_alloc,
@@ -90,7 +90,7 @@ pub fn renderStructs(
         );
         try output.appendSlice(arena_alloc, header);
 
-        for (struct_def.fields.items) |field| {
+        for (struct_definition.fields.items) |field| {
             const formatted_field = formatName(arena_alloc, field.name) catch field.name;
             const line = try std.fmt.allocPrint(
                 arena_alloc,
