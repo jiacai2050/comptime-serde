@@ -8,7 +8,7 @@ Add comptime-serde as a dependency in your `build.zig.zon`:
 # Latest version
 zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git
 # Tagged version
-zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git#v0.1.0
+zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git#v0.2.0
 ```
 
 Then in your `build.zig`:

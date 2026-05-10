@@ -1,7 +1,7 @@
 .{
     .name = .comptime_serde,
     .fingerprint = 0xf93787381fe72637,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .dependencies = .{
         .zigcli = .{
             .url = "git+https://github.com/jiacai2050/zigcli.git#76c5b533d44a13ce70bddd696378f904c9af5ac3",

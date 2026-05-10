@@ -15,7 +15,10 @@ Define your struct once, automatically serialize/deserialize across JSON, TOML, 
 ## Installation
 
 ```bash
+# Latest version
 zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git
+# Tagged version
+zig fetch --save git+https://github.com/jiacai2050/comptime-serde.git#v0.2.0
 ```
 
 ```zig
