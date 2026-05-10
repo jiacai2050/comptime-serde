@@ -16,17 +16,31 @@ pub fn Parsed(comptime T: type) type {
 }
 
 /// Per-format field options shared by JSON, TOML, and YAML.
+/// Configure via `T.serde_fields` declaration, keyed by format (e.g. `.json = .{ .rename = "userName" }`).
 pub const FormatFieldOptions = struct {
+    /// Serialize: output this key instead of the Zig field name.
+    /// Deserialize: also accept the Zig field name and any aliases as input.
+    /// Example: `rename = "userName"` maps `user_name` Zig field to `"userName"` in JSON.
     rename: ?[]const u8 = null,
+    /// Deserialize-only: accept these alternative input keys in addition to the Zig field name and rename.
+    /// Serialize has no effect — the field is always emitted as `rename` or the Zig field name.
+    /// Example: `alias = &.{"username", "user"}` accepts any of those keys when deserializing.
     alias: []const []const u8 = &.{},
+    /// If true, skip this field entirely: serialize omits it, deserialize ignores input and uses default/null.
+    /// The field must be optional or have a default value.
     skip: bool = false,
+    /// Serialize-only: omit this field from output when its value is null (for optional fields only).
+    /// Deserialize has no effect — null input is handled by the type's optional semantics.
     omit_null: bool = false,
 };
 
 /// Protobuf-specific field options.
 pub const ProtobufFieldOptions = struct {
+    /// Explicit proto field number instead of relying on declaration order (1-based).
     field_number: ?u32 = null,
+    /// Override packed encoding for repeated scalar fields.
     @"packed": ?bool = null,
+    /// Mark field as deprecated (proto `deprecated = true`).
     deprecated: bool = false,
 };
 
@@ -187,6 +201,43 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
                         @compileError(format_tag ++ " alias conflict in " ++ @typeName(T) ++ ": alias '" ++ left_alias ++ "' of " ++ left.name ++ " conflicts with alias of " ++ right.name);
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Returns true if `field_name` on `T` is marked `skip` for the given `format`.
+pub fn skipField(comptime format: Format, comptime T: type, comptime field_name: []const u8) bool {
+    return fieldConfig(format, T, field_name).skip;
+}
+
+/// Returns true if `field_name` should be included in serialized output:
+/// not skipped, and not omitted when the value is null.
+pub fn shouldIncludeField(comptime format: Format, comptime T: type, comptime field_name: []const u8, field_value: anytype) bool {
+    const config = fieldConfig(format, T, field_name);
+    if (config.skip) return false;
+    if (config.omit_null) {
+        if (@typeInfo(@TypeOf(field_value)) == .optional) {
+            if (field_value == null) return false;
+        }
+    }
+    return true;
+}
+
+/// Fills in default/null values for fields not present in the deserialized input.
+/// Returns `error.MissingField` if a required field has no default and is not skipped.
+pub fn fillMissingFields(comptime format: Format, comptime T: type, result: *T, fields_seen: []const bool) !void {
+    const struct_info = @typeInfo(T).@"struct";
+    inline for (struct_info.fields, 0..) |field, index| {
+        if (!fields_seen[index]) {
+            const config = fieldConfig(format, T, field.name);
+            if (config.skip and @typeInfo(field.type) == .optional) {
+                @field(result, field.name) = null;
+            } else if (field.default_value_ptr) |default_ptr| {
+                const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
+                @field(result, field.name) = ptr.*;
+            } else {
+                return error.MissingField;
             }
         }
     }

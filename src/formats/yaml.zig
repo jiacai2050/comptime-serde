@@ -45,13 +45,8 @@ fn writeValue(writer: *std.Io.Writer, value: anytype, indent: usize) !void {
         .@"struct" => |struct_info| {
             var wrote_any = false;
             inline for (struct_info.fields) |field| {
-                const config = common.fieldConfig(.yaml, T, field.name);
                 const field_value = @field(value, field.name);
-                var include_field = !config.skip;
-                if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
-                    include_field = false;
-                }
-                if (include_field) {
+                if (common.shouldIncludeField(.yaml, T, field.name, field_value)) {
                     if (wrote_any or indent > 0) {
                         try writeIndent(writer, indent);
                     }
@@ -166,13 +161,8 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
             // First field on same line as "- ", rest indented.
             var wrote_any = false;
             inline for (struct_info.fields) |field| {
-                const config = common.fieldConfig(.yaml, T, field.name);
                 const field_value = @field(value, field.name);
-                var include_field = !config.skip;
-                if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
-                    include_field = false;
-                }
-                if (include_field) {
+                if (common.shouldIncludeField(.yaml, T, field.name, field_value)) {
                     if (wrote_any) {
                         try writeIndent(writer, indent + 2);
                     }
@@ -386,19 +376,7 @@ fn parseValue(
                 }
             }
 
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (!fields_seen[index]) {
-                    const config = common.fieldConfig(.yaml, T, field.name);
-                    if (config.skip and @typeInfo(field.type) == .optional) {
-                        @field(result, field.name) = null;
-                    } else if (field.default_value_ptr) |default_ptr| {
-                        const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                        @field(result, field.name) = ptr.*;
-                    } else {
-                        return error.MissingField;
-                    }
-                }
-            }
+            try common.fillMissingFields(.yaml, T, &result, &fields_seen);
             return result;
         },
         else => @compileError("top-level YAML parse must target a struct, got: " ++ @typeName(T)),
@@ -739,19 +717,7 @@ fn parseSequenceItem(
                 }
             }
 
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (!fields_seen[index]) {
-                    const config = common.fieldConfig(.yaml, T, field.name);
-                    if (config.skip and @typeInfo(field.type) == .optional) {
-                        @field(result, field.name) = null;
-                    } else if (field.default_value_ptr) |default_ptr| {
-                        const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                        @field(result, field.name) = ptr.*;
-                    } else {
-                        return error.MissingField;
-                    }
-                }
-            }
+            try common.fillMissingFields(.yaml, T, &result, &fields_seen);
             return result;
         },
         else => @compileError("unsupported sequence item type: " ++ @typeName(T)),

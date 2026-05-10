@@ -39,14 +39,9 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
         .@"struct" => |struct_info| {
             // Pass 1: write key-value pairs (primitives, strings, inline arrays).
             inline for (struct_info.fields) |field| {
-                const config = common.fieldConfig(.toml, T, field.name);
                 const field_key = common.serializedFieldName(.toml, T, field.name);
                 const field_value = @field(value, field.name);
-                var include_field = !config.skip;
-                if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
-                    include_field = false;
-                }
-                if (include_field) {
+                if (common.shouldIncludeField(.toml, T, field.name, field_value)) {
                     const field_type_info = @typeInfo(field.type);
                     switch (field_type_info) {
                         .@"struct" => {}, // handled in pass 2
@@ -70,14 +65,9 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
             }
             // Pass 2: write [table] and [[array]] sections.
             inline for (struct_info.fields) |field| {
-                const config = common.fieldConfig(.toml, T, field.name);
                 const field_key = common.serializedFieldName(.toml, T, field.name);
                 const field_value = @field(value, field.name);
-                var include_field = !config.skip;
-                if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
-                    include_field = false;
-                }
-                if (include_field) {
+                if (common.shouldIncludeField(.toml, T, field.name, field_value)) {
                     const field_type_info = @typeInfo(field.type);
                     switch (field_type_info) {
                         .@"struct" => {
@@ -288,19 +278,7 @@ fn parseStructFull(
                 line_ptr.* = lines.next();
             }
 
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (!fields_seen[index]) {
-                    const config = common.fieldConfig(.toml, T, field.name);
-                    if (config.skip and @typeInfo(field.type) == .optional) {
-                        @field(result, field.name) = null;
-                    } else if (field.default_value_ptr) |default_ptr| {
-                        const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                        @field(result, field.name) = ptr.*;
-                    } else {
-                        return error.MissingField;
-                    }
-                }
-            }
+            try common.fillMissingFields(.toml, T, &result, &fields_seen);
             return result;
         },
         else => @compileError("unsupported type: " ++ @typeName(T)),

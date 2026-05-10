@@ -60,13 +60,8 @@ pub fn Serde(comptime T: type) type {
                     try writer.writeByte('{');
                     var first = true;
                     inline for (struct_info.fields) |field| {
-                        const config = common.fieldConfig(.json, T, field.name);
                         const field_value = @field(value, field.name);
-                        var include_field = !config.skip;
-                        if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
-                            include_field = false;
-                        }
-                        if (include_field) {
+                        if (common.shouldIncludeField(.json, T, field.name, field_value)) {
                             if (!first) try writer.writeByte(',');
                             first = false;
                             try writeString(writer, common.serializedFieldName(.json, T, field.name));
@@ -85,6 +80,7 @@ pub fn Serde(comptime T: type) type {
         /// Parses `input` as JSON into a `Parsed(T)` that owns all allocated memory.
         /// Caller must call `deinit()`.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+            comptime common.validateFieldConfigs(.json, T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
@@ -204,19 +200,7 @@ pub fn Serde(comptime T: type) type {
                             try scanner.skipValue();
                         }
                     }
-                    inline for (struct_info.fields, 0..) |field, index| {
-                        if (!fields_seen[index]) {
-                            const config = common.fieldConfig(.json, T, field.name);
-                            if (config.skip and @typeInfo(field.type) == .optional) {
-                                @field(result, field.name) = null;
-                            } else if (field.default_value_ptr) |default_ptr| {
-                                const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                                @field(result, field.name) = ptr.*;
-                            } else {
-                                return error.MissingField;
-                            }
-                        }
-                    }
+                    try common.fillMissingFields(.json, T, &result, &fields_seen);
                     return result;
                 },
                 .@"enum" => |enum_info| {
