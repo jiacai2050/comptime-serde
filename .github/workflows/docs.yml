@@ -29,10 +29,8 @@ jobs:
           mdbook-version: 'latest'
 
       - name: Build
-        run: mdbook build docs
-
-      - name: Copy install.sh
-        run: cp docs/src/install.sh docs/book/install.sh
+        run: |
+          cd docs && mdbook build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5

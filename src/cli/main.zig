@@ -108,9 +108,16 @@ fn readStdin(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
     errdefer result.deinit(allocator);
     var buf: [4096]u8 = undefined;
     const stdin = std.Io.File.stdin();
+    var total_read: usize = 0;
+    const max_size = 10 * 1024 * 1024;
     while (true) {
-        const n = stdin.readStreaming(io, &.{&buf}) catch break;
+        const n = stdin.readStreaming(io, &.{&buf}) catch |err| switch (err) {
+            error.EndOfStream, error.InputOutput => break,
+            else => return err,
+        };
         if (n == 0) break;
+        total_read += n;
+        if (total_read > max_size) return error.StreamTooLong;
         try result.appendSlice(allocator, buf[0..n]);
     }
     return try result.toOwnedSlice(allocator);

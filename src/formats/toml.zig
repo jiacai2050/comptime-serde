@@ -45,6 +45,14 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
                     const field_type_info = @typeInfo(field.type);
                     switch (field_type_info) {
                         .@"struct" => {}, // handled in pass 2
+                        .optional => |optional_info| {
+                            // Optional struct: handled in pass 2; optional primitives: write inline.
+                            if (@typeInfo(optional_info.child) == .@"struct") {
+                                // handled in pass 2
+                            } else {
+                                try writeKeyValue(writer, field_key, field_value);
+                            }
+                        },
                         .pointer => |pointer_info| {
                             if (pointer_info.size == .slice and pointer_info.child == u8) {
                                 // String slice → inline KV.
@@ -73,6 +81,14 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
                         .@"struct" => {
                             try writer.print("[{s}]\n", .{field_key});
                             try writeTable(writer, field_value);
+                        },
+                        .optional => |optional_info| {
+                            if (@typeInfo(optional_info.child) == .@"struct") {
+                                if (field_value) |present| {
+                                    try writer.print("[{s}]\n", .{field_key});
+                                    try writeTable(writer, present);
+                                }
+                            }
                         },
                         .pointer => |pointer_info| {
                             if (pointer_info.size == .slice and pointer_info.child != u8) {
@@ -507,6 +523,18 @@ fn dispatchTable(
                 fields_seen[index] = true;
                 return;
             }
+            if (field_info == .optional and @typeInfo(field_info.optional.child) == .@"struct") {
+                const parsed = try parseStructFull(
+                    field_info.optional.child,
+                    allocator,
+                    lines,
+                    line_ptr,
+                    false,
+                );
+                @field(result, field.name) = parsed;
+                fields_seen[index] = true;
+                return;
+            }
         }
     }
     skipSection(lines, line_ptr);
@@ -617,6 +645,15 @@ fn parseKvLine(
             // Use a comptime switch to avoid instantiating parseTomlValue for struct types.
             switch (@typeInfo(field.type)) {
                 .@"struct" => {},
+                .optional => |optional_info| {
+                    if (@typeInfo(optional_info.child) == .@"struct") {
+                        // Optional structs are handled by dispatchTable for [table] sections.
+                    } else {
+                        const parsed = try parseTomlValue(field.type, allocator, raw_value);
+                        @field(result, field.name) = parsed;
+                        fields_seen[index] = true;
+                    }
+                },
                 .pointer => |pointer_info| {
                     if (pointer_info.size == .slice) {
                         const parsed = try parseTomlValue(field.type, allocator, raw_value);
@@ -1302,4 +1339,49 @@ test "serde_fields toml skip with default" {
     defer result.deinit();
     try std.testing.expectEqual(@as(u32, 9), result.value.id);
     try std.testing.expectEqualStrings("hidden", result.value.secret);
+}
+
+test "roundtrip: optional struct" {
+    const Server = struct { host: []const u8, port: u16 };
+    const Config = struct { name: []const u8, server: ?Server };
+    const serde = Serde(Config);
+
+    // Non-null optional struct
+    const original = Config{
+        .name = "myapp",
+        .server = .{ .host = "localhost", .port = 8080 },
+    };
+
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+    try std.testing.expectEqualStrings(
+        \\name = "myapp"
+        \\[server]
+        \\host = "localhost"
+        \\port = 8080
+        \\
+    , writer.buffered());
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+    try std.testing.expectEqualStrings("myapp", restored.value.name);
+    try std.testing.expect(restored.value.server != null);
+    try std.testing.expectEqualStrings("localhost", restored.value.server.?.host);
+    try std.testing.expectEqual(@as(u16, 8080), restored.value.server.?.port);
+
+    // Null optional struct
+    const null_original = Config{ .name = "myapp", .server = null };
+    var buf2: [512]u8 = undefined;
+    var writer2 = std.Io.Writer.fixed(&buf2);
+    try serde.serialize(&writer2, null_original);
+    try std.testing.expectEqualStrings(
+        \\name = "myapp"
+        \\
+    , writer2.buffered());
+
+    var restored2 = try serde.deserialize(std.testing.allocator, writer2.buffered());
+    defer restored2.deinit();
+    try std.testing.expectEqualStrings("myapp", restored2.value.name);
+    try std.testing.expect(restored2.value.server == null);
 }

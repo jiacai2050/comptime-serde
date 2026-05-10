@@ -285,38 +285,38 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
     const struct_info = info.@"struct";
 
     inline for (struct_info.fields) |field| {
-        const ser = serializeConfig(format, T, field.name);
-        const de = deserializeConfig(format, T, field.name);
-        const skip = ser.skip or de.skip;
+        const serialize_options = serializeConfig(format, T, field.name);
+        const deserialize_options = deserializeConfig(format, T, field.name);
+        const skip = serialize_options.skip or deserialize_options.skip;
         if (skip and field.default_value_ptr == null and @typeInfo(field.type) != .optional) {
             @compileError(format_tag ++ " skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
         }
         // skip makes rename/omit_null/alias meaningless
-        if (ser.skip and ser.rename != null) {
+        if (serialize_options.skip and serialize_options.rename != null) {
             @compileError(format_tag ++ " serialize.skip and serialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
         }
-        if (ser.skip and ser.omit_null) {
+        if (serialize_options.skip and serialize_options.omit_null) {
             @compileError(format_tag ++ " serialize.skip and serialize.omit_null are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
         }
-        if (de.skip and de.rename != null) {
+        if (deserialize_options.skip and deserialize_options.rename != null) {
             @compileError(format_tag ++ " deserialize.skip and deserialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
         }
-        if (de.skip and de.alias.len > 0) {
+        if (deserialize_options.skip and deserialize_options.alias.len > 0) {
             @compileError(format_tag ++ " deserialize.skip and deserialize.alias are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
         }
         // omit_null on non-optional field has no effect
-        if (ser.omit_null and @typeInfo(field.type) != .optional) {
+        if (serialize_options.omit_null and @typeInfo(field.type) != .optional) {
             @compileError(format_tag ++ " serialize.omit_null on non-optional field has no effect: " ++ @typeName(T) ++ "." ++ field.name);
         }
         // alias must not duplicate the rename or field name
-        if (de.rename) |rename| {
-            for (de.alias) |alias_name| {
+        if (deserialize_options.rename) |rename| {
+            for (deserialize_options.alias) |alias_name| {
                 if (std.mem.eql(u8, alias_name, rename)) {
                     @compileError(format_tag ++ " deserialize.alias '" ++ alias_name ++ "' duplicates deserialize.rename on " ++ @typeName(T) ++ "." ++ field.name);
                 }
             }
         }
-        for (de.alias) |alias_name| {
+        for (deserialize_options.alias) |alias_name| {
             if (std.mem.eql(u8, alias_name, field.name)) {
                 @compileError(format_tag ++ " deserialize.alias '" ++ alias_name ++ "' duplicates field name on " ++ @typeName(T) ++ "." ++ field.name);
             }
@@ -324,37 +324,37 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
     }
 
     inline for (struct_info.fields, 0..) |left, left_index| {
-        const left_ser = serializeConfig(format, T, left.name);
-        const left_de = deserializeConfig(format, T, left.name);
-        const left_ser_name = left_ser.rename orelse left.name;
+        const left_serialize = serializeConfig(format, T, left.name);
+        const left_deserialize = deserializeConfig(format, T, left.name);
+        const left_serialize_name = left_serialize.rename orelse left.name;
         // When rename is set, the original field name is no longer accepted on input,
         // so the effective deserialize key is the rename; otherwise it's the field name.
-        const left_de_name = left_de.rename orelse left.name;
+        const left_deserialize_name = left_deserialize.rename orelse left.name;
         inline for (struct_info.fields, 0..) |right, right_index| {
             if (left_index == right_index) continue;
-            const right_ser = serializeConfig(format, T, right.name);
-            const right_de = deserializeConfig(format, T, right.name);
-            const right_ser_name = right_ser.rename orelse right.name;
-            const right_de_name = right_de.rename orelse right.name;
+            const right_serialize = serializeConfig(format, T, right.name);
+            const right_deserialize = deserializeConfig(format, T, right.name);
+            const right_serialize_name = right_serialize.rename orelse right.name;
+            const right_deserialize_name = right_deserialize.rename orelse right.name;
 
             // Serialize names must not collide.
-            if (std.mem.eql(u8, left_ser_name, right_ser_name)) {
+            if (std.mem.eql(u8, left_serialize_name, right_serialize_name)) {
                 @compileError(format_tag ++ " field key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
             }
             // Deserialize names must not collide.
-            if (std.mem.eql(u8, left_de_name, right_de_name)) {
+            if (std.mem.eql(u8, left_deserialize_name, right_deserialize_name)) {
                 @compileError(format_tag ++ " deserialize key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
             }
             // Deserialize name of left must not collide with serialize name of right.
-            if (!std.mem.eql(u8, left.name, right.name) and std.mem.eql(u8, left_de_name, right_ser_name)) {
+            if (!std.mem.eql(u8, left.name, right.name) and std.mem.eql(u8, left_deserialize_name, right_serialize_name)) {
                 @compileError(format_tag ++ " key conflict in " ++ @typeName(T) ++ ": deserialize key of " ++ left.name ++ " collides with serialize key of " ++ right.name);
             }
 
-            for (left_de.alias) |left_alias| {
-                if (std.mem.eql(u8, left_alias, right_ser_name) or std.mem.eql(u8, left_alias, right_de_name)) {
+            for (left_deserialize.alias) |left_alias| {
+                if (std.mem.eql(u8, left_alias, right_serialize_name) or std.mem.eql(u8, left_alias, right_deserialize_name)) {
                     @compileError(format_tag ++ " alias conflict in " ++ @typeName(T) ++ ": alias '" ++ left_alias ++ "' conflicts with field " ++ right.name);
                 }
-                for (right_de.alias) |right_alias| {
+                for (right_deserialize.alias) |right_alias| {
                     if (std.mem.eql(u8, left_alias, right_alias)) {
                         @compileError(format_tag ++ " alias conflict in " ++ @typeName(T) ++ ": alias '" ++ left_alias ++ "' of " ++ left.name ++ " conflicts with alias of " ++ right.name);
                     }
@@ -380,15 +380,15 @@ pub fn shouldIncludeField(comptime format: Format, comptime T: type, comptime fi
 /// Fills in default/null values for fields not present in the deserialized input.
 /// Returns `error.MissingField` if a required field has no default and is not skipped.
 pub fn fillMissingFields(comptime format: Format, comptime T: type, result: *T, fields_seen: []const bool) !void {
+    _ = format;
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
         if (!fields_seen[index]) {
-            const config = deserializeConfig(format, T, field.name);
-            if (config.skip and @typeInfo(field.type) == .optional) {
-                @field(result, field.name) = null;
-            } else if (field.default_value_ptr) |default_ptr| {
+            if (field.default_value_ptr) |default_ptr| {
                 const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
                 @field(result, field.name) = ptr.*;
+            } else if (@typeInfo(field.type) == .optional) {
+                @field(result, field.name) = null;
             } else {
                 return error.MissingField;
             }
