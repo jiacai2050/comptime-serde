@@ -48,7 +48,8 @@ fn serializeMessage(
     const struct_info = @typeInfo(T).@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
-        const field_num: u32 = index + 1;
+        const options = common.fieldOptions(T, field.name);
+        const field_num: u32 = if (options.protobuf) |protobuf_options| protobuf_options.field_number orelse index + 1 else @intCast(index + 1);
         const field_value = @field(value, field.name);
         try serializeField(allocator, buf, field.type, field_num, field_value);
     }
@@ -201,7 +202,9 @@ fn deserializeMessage(
 
         var matched = false;
         inline for (struct_info.fields, 0..) |field, index| {
-            if (field_num == index + 1) {
+            const options = common.fieldOptions(T, field.name);
+            const expected_num: u32 = if (options.protobuf) |protobuf_options| protobuf_options.field_number orelse index + 1 else @intCast(index + 1);
+            if (field_num == expected_num) {
                 matched = true;
                 try deserializeFieldValue(
                     T,
@@ -725,4 +728,58 @@ test "error: empty input missing fields" {
     const serde = Serde(Data);
     const result = serde.deserialize(std.testing.allocator, "");
     try std.testing.expectError(error.MissingField, result);
+}
+
+test "roundtrip: custom field numbers" {
+    const Data = struct {
+        name: []const u8,
+        port: u32,
+        flag: bool,
+
+        pub const serde_fields = .{
+            .name = .{ .protobuf = .{ .field_number = 3 } },
+            .port = .{ .protobuf = .{ .field_number = 1 } },
+            .flag = .{ .protobuf = .{ .field_number = 2 } },
+        };
+    };
+    const serde = Serde(Data);
+    const original = Data{ .name = "test", .port = 9090, .flag = true };
+
+    var buf: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, std.testing.allocator, original);
+
+    var result = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer result.deinit();
+
+    try std.testing.expectEqualStrings("test", result.value.name);
+    try std.testing.expectEqual(@as(u32, 9090), result.value.port);
+    try std.testing.expectEqual(true, result.value.flag);
+}
+
+test "roundtrip: partial field numbers with defaults" {
+    const Data = struct {
+        a: u32,
+        b: u32 = 0,
+        c: []const u8,
+
+        pub const serde_fields = .{
+            .a = .{ .protobuf = .{ .field_number = 1 } },
+            .b = .{ .protobuf = .{ .field_number = 5 } },
+            .c = .{ .protobuf = .{ .field_number = 3 } },
+        };
+    };
+    const serde = Serde(Data);
+    const original = Data{ .a = 42, .b = 0, .c = "hello" };
+
+    var buf: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, std.testing.allocator, original);
+
+    var result = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(u32, 42), result.value.a);
+    try std.testing.expectEqual(@as(u32, 0), result.value.b);
+    try std.testing.expectEqualStrings("hello", result.value.c);
 }

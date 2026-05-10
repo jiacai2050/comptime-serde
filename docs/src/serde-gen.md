@@ -243,7 +243,7 @@ echo '{"x":1,"y":2}' | serde-gen --format json -
 
 ### Proto
 
-- **Proto3 only** — `syntax = "proto2"` is not supported.
+- **[Proto3](https://protobuf.dev/programming-guides/proto3/) only** — `syntax = "proto2"` is not supported.
 - **No `oneof`, `map`, `service`, `extend`, or `reserved`** declarations. These lines are silently skipped.
 - **No imports** — all types must be defined in the same file.
 - **Forward references** — a type must be defined before it is referenced. If `message A` references `message B` but `B` is defined later in the file, the generated Zig will have a compile error.

@@ -60,10 +60,6 @@ pub const FormatFieldOptions = struct {
 pub const ProtobufFieldOptions = struct {
     /// Explicit proto field number instead of relying on declaration order (1-based).
     field_number: ?u32 = null,
-    /// Override packed encoding for repeated scalar fields.
-    @"packed": ?bool = null,
-    /// Mark field as deprecated (proto `deprecated = true`).
-    deprecated: bool = false,
 };
 
 /// Aggregated field options keyed by format, populated from `T.serde_fields`.
@@ -209,8 +205,6 @@ fn parseProtobufFieldOptions(comptime T: type, comptime field_name: []const u8, 
     }
     var options: ProtobufFieldOptions = .{};
     if (@hasField(meta_type, "field_number")) options.field_number = @field(protobuf_meta, "field_number");
-    if (@hasField(meta_type, "packed")) options.@"packed" = @field(protobuf_meta, "packed");
-    if (@hasField(meta_type, "deprecated")) options.deprecated = @field(protobuf_meta, "deprecated");
     return options;
 }
 

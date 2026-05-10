@@ -177,15 +177,13 @@ fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .sc
 }
 
 fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
-    var tokens = std.mem.splitScalar(u8, line, ' ');
+    var tokens = std.mem.tokenizeAny(u8, line, " \t");
     var parts: [5][]const u8 = undefined;
     var count: usize = 0;
 
     while (tokens.next()) |token| {
-        const trimmed_token = std.mem.trim(u8, token, " \t");
-        if (trimmed_token.len == 0) continue;
         if (count >= 5) break;
-        parts[count] = trimmed_token;
+        parts[count] = token;
         count += 1;
     }
 
@@ -234,15 +232,13 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
 }
 
 fn parseEnumValueLine(allocator: std.mem.Allocator, line: []const u8) ?EnumValueDef {
-    var tokens = std.mem.splitScalar(u8, line, ' ');
+    var tokens = std.mem.tokenizeAny(u8, line, " \t");
     var parts: [3][]const u8 = undefined;
     var count: usize = 0;
 
     while (tokens.next()) |token| {
-        const trimmed_token = std.mem.trim(u8, token, " \t");
-        if (trimmed_token.len == 0) continue;
         if (count >= 3) break;
-        parts[count] = trimmed_token;
+        parts[count] = token;
         count += 1;
     }
 
@@ -392,16 +388,6 @@ fn needsQuoting(name: []const u8) bool {
 fn formatName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     if (needsQuoting(name)) {
         return try std.fmt.allocPrint(allocator, "@\"{s}\"", .{name});
-    }
-    return name;
-}
-
-fn capitalizeFirst(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    if (name.len == 0) return name;
-    if (name[0] >= 'a' and name[0] <= 'z') {
-        const result = try allocator.dupe(u8, name);
-        result[0] -= 32;
-        return result;
     }
     return name;
 }

@@ -107,15 +107,13 @@ Protobuf support is work in progress. Zig structs map to protobuf messages:
 - `enum(u32)` → enum
 - `?T` → optional (omitted when null)
 
-Field numbers and other options can be configured via `ProtobufFieldOptions`:
+Field numbers can be configured via `ProtobufFieldOptions` to override declaration order:
 
 ```zig
 pub const serde_fields = .{
     .user_name = .{
         .protobuf = .{
             .field_number = 1,
-            .packed = true,
-            .deprecated = false,
         },
     },
 };
