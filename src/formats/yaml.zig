@@ -7,14 +7,14 @@ pub fn Serde(comptime T: type) type {
     return struct {
         /// Writes `value` as YAML to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
-            comptime validateFieldConfigs(T);
+            comptime common.validateFieldConfigs(.yaml, T);
             try writeValue(writer, value, 0);
         }
 
         /// Parses `input` as YAML into a `Parsed(T)`.
         /// Caller must call `deinit()` to free all allocated memory.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
-            comptime validateFieldConfigs(T);
+            comptime common.validateFieldConfigs(.yaml, T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
@@ -40,13 +40,12 @@ pub fn Serde(comptime T: type) type {
 
 fn writeValue(writer: *std.Io.Writer, value: anytype, indent: usize) !void {
     const T = @TypeOf(value);
-    comptime validateFieldConfigs(T);
     const info = @typeInfo(T);
     switch (info) {
         .@"struct" => |struct_info| {
             var wrote_any = false;
             inline for (struct_info.fields) |field| {
-                const config = fieldConfig(T, field.name);
+                const config = common.fieldConfig(.yaml, T, field.name);
                 const field_value = @field(value, field.name);
                 var include_field = !config.skip;
                 if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
@@ -57,7 +56,7 @@ fn writeValue(writer: *std.Io.Writer, value: anytype, indent: usize) !void {
                         try writeIndent(writer, indent);
                     }
                     wrote_any = true;
-                    try writer.print("{s}:", .{serializedFieldName(T, field.name)});
+                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field.name)});
                     try writeFieldValue(writer, field_value, indent);
                 }
             }
@@ -167,7 +166,7 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
             // First field on same line as "- ", rest indented.
             var wrote_any = false;
             inline for (struct_info.fields) |field| {
-                const config = fieldConfig(T, field.name);
+                const config = common.fieldConfig(.yaml, T, field.name);
                 const field_value = @field(value, field.name);
                 var include_field = !config.skip;
                 if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
@@ -178,7 +177,7 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
                         try writeIndent(writer, indent + 2);
                     }
                     wrote_any = true;
-                    try writer.print("{s}:", .{serializedFieldName(T, field.name)});
+                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field.name)});
                     try writeFieldValue(writer, field_value, indent + 2);
                 }
             }
@@ -303,61 +302,6 @@ fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
     }
 }
 
-const YamlFieldConfig = common.YamlFieldOptions;
-
-fn fieldConfig(comptime T: type, comptime field_name: []const u8) YamlFieldConfig {
-    const options = common.fieldOptions(T, field_name);
-    return options.yaml orelse .{};
-}
-
-fn serializedFieldName(comptime T: type, comptime field_name: []const u8) []const u8 {
-    const config = fieldConfig(T, field_name);
-    return config.rename orelse field_name;
-}
-
-fn matchesInputKey(comptime T: type, comptime field_name: []const u8, key: []const u8) bool {
-    const config = fieldConfig(T, field_name);
-    if (std.mem.eql(u8, field_name, key)) return true;
-    if (config.rename) |rename| {
-        if (std.mem.eql(u8, rename, key)) return true;
-    }
-    for (config.alias) |alias| {
-        if (std.mem.eql(u8, alias, key)) return true;
-    }
-    return false;
-}
-
-fn validateFieldConfigs(comptime T: type) void {
-    const info = @typeInfo(T);
-    if (info != .@"struct") return;
-    comptime common.validateSerdeFieldNames(T);
-    const struct_info = info.@"struct";
-
-    inline for (struct_info.fields) |field| {
-        const config = fieldConfig(T, field.name);
-        if (config.skip and field.default_value_ptr == null and @typeInfo(field.type) != .optional) {
-            @compileError("yaml skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
-        }
-    }
-
-    inline for (struct_info.fields, 0..) |left, left_index| {
-        const left_name = serializedFieldName(T, left.name);
-        const left_config = fieldConfig(T, left.name);
-        inline for (struct_info.fields, 0..) |right, right_index| {
-            if (left_index == right_index) continue;
-            const right_name = serializedFieldName(T, right.name);
-            if (std.mem.eql(u8, left_name, right_name)) {
-                @compileError("yaml field key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
-            }
-            for (left_config.alias) |alias| {
-                if (std.mem.eql(u8, alias, right_name) or std.mem.eql(u8, alias, right.name)) {
-                    @compileError("yaml alias conflict in " ++ @typeName(T) ++ ": alias '" ++ alias ++ "' conflicts with field " ++ right.name);
-                }
-            }
-        }
-    }
-}
-
 // ==================== Deserialization ====================
 
 fn stripCr(line: []const u8) []const u8 {
@@ -386,7 +330,6 @@ fn parseValue(
     pos: *usize,
     base_indent: usize,
 ) !T {
-    comptime validateFieldConfigs(T);
     const info = @typeInfo(T);
     switch (info) {
         .@"struct" => |struct_info| {
@@ -415,10 +358,9 @@ fn parseValue(
                 const after_colon = std.mem.trimStart(u8, trimmed[colon_pos + 1 ..], " ");
 
                 inline for (struct_info.fields, 0..) |field, index| {
-                    if (matchesInputKey(T, field.name, key)) {
-                        const config = fieldConfig(T, field.name);
-                        const is_skipped: bool = config.skip;
-                        if (is_skipped) {
+                    if (common.matchesInputKey(.yaml, T, field.name, key)) {
+                        const config = common.fieldConfig(.yaml, T, field.name);
+                        if (config.skip) {
                             pos.* += 1;
                             skipNestedBlock(all_lines, pos, line_indent);
                             break;
@@ -446,7 +388,7 @@ fn parseValue(
 
             inline for (struct_info.fields, 0..) |field, index| {
                 if (!fields_seen[index]) {
-                    const config = fieldConfig(T, field.name);
+                    const config = common.fieldConfig(.yaml, T, field.name);
                     if (config.skip and @typeInfo(field.type) == .optional) {
                         @field(result, field.name) = null;
                     } else if (field.default_value_ptr) |default_ptr| {
@@ -726,10 +668,9 @@ fn parseSequenceItem(
             const after_colon = std.mem.trimStart(u8, item_content[colon_pos + 1 ..], " ");
 
             inline for (struct_info.fields, 0..) |field, index| {
-                if (matchesInputKey(T, field.name, key)) {
-                    const config = fieldConfig(T, field.name);
-                    const is_skipped: bool = config.skip;
-                    if (is_skipped) {
+                if (common.matchesInputKey(.yaml, T, field.name, key)) {
+                    const config = common.fieldConfig(.yaml, T, field.name);
+                    if (config.skip) {
                         skipNestedBlock(all_lines, pos, item_indent + 2);
                         break;
                     }
@@ -774,10 +715,9 @@ fn parseSequenceItem(
                 pos.* += 1;
 
                 inline for (struct_info.fields, 0..) |field, index| {
-                    if (matchesInputKey(T, field.name, kv_key)) {
-                        const config = fieldConfig(T, field.name);
-                        const is_skipped: bool = config.skip;
-                        if (is_skipped) {
+                    if (common.matchesInputKey(.yaml, T, field.name, kv_key)) {
+                        const config = common.fieldConfig(.yaml, T, field.name);
+                        if (config.skip) {
                             skipNestedBlock(all_lines, pos, line_indent);
                             break;
                         }
@@ -801,7 +741,7 @@ fn parseSequenceItem(
 
             inline for (struct_info.fields, 0..) |field, index| {
                 if (!fields_seen[index]) {
-                    const config = fieldConfig(T, field.name);
+                    const config = common.fieldConfig(.yaml, T, field.name);
                     if (config.skip and @typeInfo(field.type) == .optional) {
                         @field(result, field.name) = null;
                     } else if (field.default_value_ptr) |default_ptr| {

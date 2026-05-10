@@ -7,7 +7,7 @@ pub fn Serde(comptime T: type) type {
     return struct {
         /// Writes `value` as JSON to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
-            comptime validateFieldConfigs(T);
+            comptime common.validateFieldConfigs(.json, T);
             const info = @typeInfo(T);
             switch (info) {
                 .bool => try writer.writeAll(if (value) "true" else "false"),
@@ -60,7 +60,7 @@ pub fn Serde(comptime T: type) type {
                     try writer.writeByte('{');
                     var first = true;
                     inline for (struct_info.fields) |field| {
-                        const config = fieldConfig(T, field.name);
+                        const config = common.fieldConfig(.json, T, field.name);
                         const field_value = @field(value, field.name);
                         var include_field = !config.skip;
                         if (config.omit_null and @typeInfo(field.type) == .optional and field_value == null) {
@@ -69,7 +69,7 @@ pub fn Serde(comptime T: type) type {
                         if (include_field) {
                             if (!first) try writer.writeByte(',');
                             first = false;
-                            try writeString(writer, serializedFieldName(T, field.name));
+                            try writeString(writer, common.serializedFieldName(.json, T, field.name));
                             try writer.writeByte(':');
                             const FieldSerializer = Serde(field.type);
                             try FieldSerializer.serialize(writer, field_value);
@@ -98,7 +98,6 @@ pub fn Serde(comptime T: type) type {
         }
 
         fn parseValue(scanner: *std.json.Scanner, allocator: std.mem.Allocator) !T {
-            comptime validateFieldConfigs(T);
             const info = @typeInfo(T);
             switch (info) {
                 .bool => {
@@ -188,10 +187,9 @@ pub fn Serde(comptime T: type) type {
                             else => return error.UnexpectedToken,
                         };
                         inline for (struct_info.fields, 0..) |field, index| {
-                            if (matchesInputKey(T, field.name, key)) {
-                                const config = fieldConfig(T, field.name);
-                                const is_skipped: bool = config.skip;
-                                if (is_skipped) {
+                            if (common.matchesInputKey(.json, T, field.name, key)) {
+                                const config = common.fieldConfig(.json, T, field.name);
+                                if (config.skip) {
                                     try scanner.skipValue();
                                     break;
                                 }
@@ -208,7 +206,7 @@ pub fn Serde(comptime T: type) type {
                     }
                     inline for (struct_info.fields, 0..) |field, index| {
                         if (!fields_seen[index]) {
-                            const config = fieldConfig(T, field.name);
+                            const config = common.fieldConfig(.json, T, field.name);
                             if (config.skip and @typeInfo(field.type) == .optional) {
                                 @field(result, field.name) = null;
                             } else if (field.default_value_ptr) |default_ptr| {
@@ -238,61 +236,6 @@ pub fn Serde(comptime T: type) type {
             }
         }
     };
-}
-
-const JsonFieldConfig = common.JsonFieldOptions;
-
-fn fieldConfig(comptime T: type, comptime field_name: []const u8) JsonFieldConfig {
-    const options = common.fieldOptions(T, field_name);
-    return options.json orelse .{};
-}
-
-fn serializedFieldName(comptime T: type, comptime field_name: []const u8) []const u8 {
-    const config = fieldConfig(T, field_name);
-    return config.rename orelse field_name;
-}
-
-fn matchesInputKey(comptime T: type, comptime field_name: []const u8, key: []const u8) bool {
-    const config = fieldConfig(T, field_name);
-    if (std.mem.eql(u8, field_name, key)) return true;
-    if (config.rename) |rename| {
-        if (std.mem.eql(u8, rename, key)) return true;
-    }
-    for (config.alias) |alias| {
-        if (std.mem.eql(u8, alias, key)) return true;
-    }
-    return false;
-}
-
-fn validateFieldConfigs(comptime T: type) void {
-    const info = @typeInfo(T);
-    if (info != .@"struct") return;
-    comptime common.validateSerdeFieldNames(T);
-    const struct_info = info.@"struct";
-
-    inline for (struct_info.fields) |field| {
-        const config = fieldConfig(T, field.name);
-        if (config.skip and field.default_value_ptr == null and @typeInfo(field.type) != .optional) {
-            @compileError("json skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
-        }
-    }
-
-    inline for (struct_info.fields, 0..) |left, left_index| {
-        const left_name = serializedFieldName(T, left.name);
-        const left_config = fieldConfig(T, left.name);
-        inline for (struct_info.fields, 0..) |right, right_index| {
-            if (left_index == right_index) continue;
-            const right_name = serializedFieldName(T, right.name);
-            if (std.mem.eql(u8, left_name, right_name)) {
-                @compileError("json field key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
-            }
-            for (left_config.alias) |alias| {
-                if (std.mem.eql(u8, alias, right_name) or std.mem.eql(u8, alias, right.name)) {
-                    @compileError("json alias conflict in " ++ @typeName(T) ++ ": alias '" ++ alias ++ "' conflicts with field " ++ right.name);
-                }
-            }
-        }
-    }
 }
 
 fn writeString(writer: *std.Io.Writer, string: []const u8) !void {
