@@ -178,7 +178,9 @@ fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .sc
 }
 
 fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
-    var tokenizer = std.mem.tokenizeAny(u8, line, " \t");
+    // Tokenize on whitespace and structural characters so that
+    // "string host=1;" and "string host = 1;" both parse correctly.
+    var tokenizer = std.mem.tokenizeAny(u8, line, " \t=;[]{}");
     var tokens: [5][]const u8 = undefined;
     var count: usize = 0;
 
@@ -198,28 +200,11 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
         type_offset = 1;
     }
 
-    if (type_offset + 2 > count) return null;
+    if (type_offset + 2 >= count) return null;
 
     const proto_type = tokens[type_offset];
-    var field_name = tokens[type_offset + 1];
-
-    // Strip trailing semicolon
-    if (field_name.len > 0 and field_name[field_name.len - 1] == ';') {
-        field_name = field_name[0 .. field_name.len - 1];
-    }
-
-    // Strip trailing bracket options like [deprecated = true]
-    if (std.mem.indexOfScalar(u8, field_name, '[')) |bracket| {
-        field_name = field_name[0..bracket];
-    }
-
-    // Extract field number from "= N" or "=N;"
-    if (type_offset + 3 >= count) return null;
-    var number_str = tokens[type_offset + 3];
-    // Strip trailing semicolon
-    if (number_str.len > 0 and number_str[number_str.len - 1] == ';') {
-        number_str = number_str[0 .. number_str.len - 1];
-    }
+    const field_name = tokens[type_offset + 1];
+    const number_str = tokens[type_offset + 2];
 
     const field_number = std.fmt.parseInt(u32, number_str, 10) catch return null;
     const zig_type = mapProtoType(allocator, proto_type, is_repeated) catch return null;
@@ -233,7 +218,9 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDef {
 }
 
 fn parseEnumValueLine(allocator: std.mem.Allocator, line: []const u8) ?EnumValueDef {
-    var tokenizer = std.mem.tokenizeAny(u8, line, " \t");
+    // Tokenize on whitespace and structural characters so that
+    // "UNKNOWN=0;" and "UNKNOWN = 0;" both parse correctly.
+    var tokenizer = std.mem.tokenizeAny(u8, line, " \t=;[]{}");
     var tokens: [3][]const u8 = undefined;
     var count: usize = 0;
 
@@ -243,19 +230,10 @@ fn parseEnumValueLine(allocator: std.mem.Allocator, line: []const u8) ?EnumValue
         count += 1;
     }
 
-    if (count < 3) return null;
+    if (count < 2) return null;
 
-    var value_name = tokens[0];
-    // Strip trailing semicolon from name (e.g. "UNKNOWN;" from "UNKNOWN = 0;")
-    if (value_name.len > 0 and value_name[value_name.len - 1] == ';') {
-        value_name = value_name[0 .. value_name.len - 1];
-    }
-
-    // tokens[1] should be "="
-    var number_str = tokens[2];
-    if (number_str.len > 0 and number_str[number_str.len - 1] == ';') {
-        number_str = number_str[0 .. number_str.len - 1];
-    }
+    const value_name = tokens[0];
+    const number_str = tokens[1];
 
     const number = std.fmt.parseInt(u32, number_str, 10) catch return null;
     const lowercase = toLowercase(allocator, value_name) catch return null;
@@ -681,6 +659,73 @@ test "enum values lowercased" {
         \\    state_unknown = 0,
         \\    state_active = 1,
         \\    some_value = 2,
+        \\};
+        \\
+    , output);
+}
+
+test "compact field syntax (no spaces around =)" {
+    const output = try generate(std.testing.allocator,
+        \\syntax = "proto3";
+        \\
+        \\message Compact {
+        \\  string name=1;
+        \\  uint32 port=2;
+        \\  bool active=3;
+        \\}
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Compact = struct {
+        \\    name: []const u8,
+        \\    port: u32,
+        \\    active: bool,
+        \\    pub const serde_fields = .{
+        \\        .name = .{ .protobuf = .{ .field_number = 1 } },
+        \\        .port = .{ .protobuf = .{ .field_number = 2 } },
+        \\        .active = .{ .protobuf = .{ .field_number = 3 } },
+        \\    };
+        \\};
+        \\
+    , output);
+}
+
+test "compact enum syntax (no spaces around =)" {
+    const output = try generate(std.testing.allocator,
+        \\syntax = "proto3";
+        \\
+        \\enum State {
+        \\  UNKNOWN=0;
+        \\  ACTIVE=1;
+        \\  INACTIVE=2;
+        \\}
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const State = enum(u32) {
+        \\    unknown = 0,
+        \\    active = 1,
+        \\    inactive = 2,
+        \\};
+        \\
+    , output);
+}
+
+test "repeated field with bracket options" {
+    const output = try generate(std.testing.allocator,
+        \\syntax = "proto3";
+        \\
+        \\message Packed {
+        \\  repeated uint32 values = 1 [packed = true];
+        \\}
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Packed = struct {
+        \\    values: []const u32,
+        \\    pub const serde_fields = .{
+        \\        .values = .{ .protobuf = .{ .field_number = 1 } },
+        \\    };
         \\};
         \\
     , output);

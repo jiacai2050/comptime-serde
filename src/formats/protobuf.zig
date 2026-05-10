@@ -18,6 +18,7 @@ pub fn Serde(comptime T: type) type {
             allocator: std.mem.Allocator,
             value: T,
         ) !void {
+            comptime common.validateProtobufFieldNumbers(T);
             var buf = std.ArrayList(u8).empty;
             defer buf.deinit(allocator);
             try serializeMessage(allocator, &buf, value);
@@ -27,6 +28,7 @@ pub fn Serde(comptime T: type) type {
         /// Deserializes protobuf wire format into `Parsed(T)`.
         /// Caller must call `deinit()`.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+            comptime common.validateProtobufFieldNumbers(T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
             const arena_alloc = arena.allocator();
