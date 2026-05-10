@@ -66,13 +66,19 @@ pub fn main(init: std.process.Init) !void {
         std.process.fatal("missing input file. Use --help for usage.", .{});
     };
 
-    const format = result.options.format orelse detectFormat(file_path) orelse {
+    const is_stdin = std.mem.eql(u8, file_path, "-");
+
+    const format = result.options.format orelse
+        if (is_stdin) null else detectFormat(file_path);
+    if (format == null) {
         std.process.fatal("cannot detect format from extension. Use --format to specify.", .{});
-    };
+    }
 
-    const generator = selectGenerator(format);
+    const generator = selectGenerator(format.?);
 
-    const content = std.Io.Dir.cwd().readFileAlloc(
+    const content = if (is_stdin) readStdin(io, allocator) catch {
+        std.process.fatal("failed to read from stdin", .{});
+    } else std.Io.Dir.cwd().readFileAlloc(
         io,
         file_path,
         allocator,
@@ -95,6 +101,19 @@ pub fn main(init: std.process.Init) !void {
     defer if (!std.mem.eql(u8, root_name, "Root")) allocator.free(output);
 
     try std.Io.File.stdout().writeStreamingAll(io, output);
+}
+
+fn readStdin(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(allocator);
+    var buf: [4096]u8 = undefined;
+    const stdin = std.Io.File.stdin();
+    while (true) {
+        const n = stdin.readStreaming(io, &.{&buf}) catch break;
+        if (n == 0) break;
+        try result.appendSlice(allocator, buf[0..n]);
+    }
+    return try result.toOwnedSlice(allocator);
 }
 
 const GenerateFn = *const fn (std.mem.Allocator, []const u8) anyerror![]const u8;

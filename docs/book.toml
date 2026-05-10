@@ -1,0 +1,22 @@
+[book]
+title = "comptime-serde"
+authors = ["jiacai2050"]
+description = "Compile-time serialization and deserialization for Zig."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/comptime-serde/"
+git-repository-url = "https://github.com/jiacai2050/comptime-serde"
+edit-url-template = "https://github.com/jiacai2050/comptime-serde/edit/main/docs/{path}"
+additional-js = ["static/zig-hl.js", "static/giscus.js"]
+
+[output.html.search]
+enable = true
+
+[output.html.print]
+enable = true    # include support for printable output
+page-break = true # insert page-break after each chapter

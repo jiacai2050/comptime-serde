@@ -349,7 +349,7 @@ fn parseValue(
 
                 inline for (struct_info.fields, 0..) |field, index| {
                     if (common.matchesInputKey(.yaml, T, field.name, key)) {
-                        const config = common.fieldConfig(.yaml, T, field.name);
+                        const config = common.deserializeConfig(.yaml, T, field.name);
                         if (config.skip) {
                             pos.* += 1;
                             skipNestedBlock(all_lines, pos, line_indent);
@@ -647,7 +647,7 @@ fn parseSequenceItem(
 
             inline for (struct_info.fields, 0..) |field, index| {
                 if (common.matchesInputKey(.yaml, T, field.name, key)) {
-                    const config = common.fieldConfig(.yaml, T, field.name);
+                    const config = common.deserializeConfig(.yaml, T, field.name);
                     if (config.skip) {
                         skipNestedBlock(all_lines, pos, item_indent + 2);
                         break;
@@ -694,7 +694,7 @@ fn parseSequenceItem(
 
                 inline for (struct_info.fields, 0..) |field, index| {
                     if (common.matchesInputKey(.yaml, T, field.name, kv_key)) {
-                        const config = common.fieldConfig(.yaml, T, field.name);
+                        const config = common.deserializeConfig(.yaml, T, field.name);
                         if (config.skip) {
                             skipNestedBlock(all_lines, pos, line_indent);
                             break;
@@ -1327,8 +1327,8 @@ test "serde_fields yaml rename and alias" {
         pub const serde_fields = .{
             .name = .{
                 .yaml = .{
-                    .rename = "user-name",
-                    .alias = &.{"username"},
+                    .serialize = .{ .rename = "user-name" },
+                    .deserialize = .{ .rename = "user-name", .alias = &.{"username"} },
                 },
             },
         };
@@ -1357,7 +1357,7 @@ test "serde_fields yaml omit_null" {
 
         pub const serde_fields = .{
             .note = .{
-                .yaml = .{ .omit_null = true },
+                .yaml = .{ .serialize = .{ .omit_null = true } },
             },
         };
     };
@@ -1379,7 +1379,10 @@ test "serde_fields yaml skip with default" {
 
         pub const serde_fields = .{
             .secret = .{
-                .yaml = .{ .skip = true },
+                .yaml = .{
+                    .serialize = .{ .skip = true },
+                    .deserialize = .{ .skip = true },
+                },
             },
         };
     };

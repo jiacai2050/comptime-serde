@@ -121,7 +121,26 @@ exe.root_module.addImport("comptime_serde", serde_dep.module("comptime_serde"));
 
 A code generation tool that infers Zig struct definitions from data files.
 
-Pre-built binaries are available on the [GitHub Releases](https://github.com/jiacai2050/comptime-serde/releases) page, or build from source:
+### Install serde-gen
+
+```bash
+curl -fsSL https://jiacai2050.github.io/comptime-serde/install.sh | sh
+```
+
+Options:
+
+```bash
+# Install a specific version
+sh install.sh --version v0.1.0
+
+# Install to a custom directory
+sh install.sh --prefix /usr/local/bin
+
+# Use proxy for users in China
+sh install.sh --china
+```
+
+Pre-built binaries are also available on the [GitHub Releases](https://github.com/jiacai2050/comptime-serde/releases) page, or build from source:
 
 ```bash
 # Build from source

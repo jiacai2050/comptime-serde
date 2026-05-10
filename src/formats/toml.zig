@@ -445,7 +445,7 @@ fn parseKvLineWithString(
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
         if (common.matchesInputKey(.toml, T, field.name, key)) {
-            const config = common.fieldConfig(.toml, T, field.name);
+            const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
@@ -488,7 +488,7 @@ fn dispatchTable(
 
     inline for (struct_info.fields, 0..) |field, index| {
         if (common.matchesInputKey(.toml, T, field.name, table_name)) {
-            const config = common.fieldConfig(.toml, T, field.name);
+            const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) {
                 skipSection(lines, line_ptr);
                 return;
@@ -525,7 +525,7 @@ fn dispatchTableArray(
 
     inline for (struct_info.fields, 0..) |field, index| {
         if (common.matchesInputKey(.toml, T, field.name, array_name)) {
-            const config = common.fieldConfig(.toml, T, field.name);
+            const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) {
                 skipSection(lines, line_ptr);
                 return;
@@ -611,7 +611,7 @@ fn parseKvLine(
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
         if (common.matchesInputKey(.toml, T, field.name, key)) {
-            const config = common.fieldConfig(.toml, T, field.name);
+            const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
             // Use a comptime switch to avoid instantiating parseTomlValue for struct types.
@@ -1235,8 +1235,8 @@ test "serde_fields toml rename and alias" {
         pub const serde_fields = .{
             .name = .{
                 .toml = .{
-                    .rename = "user_name",
-                    .alias = &.{"username"},
+                    .serialize = .{ .rename = "user_name" },
+                    .deserialize = .{ .rename = "user_name", .alias = &.{"username"} },
                 },
             },
         };
@@ -1262,7 +1262,7 @@ test "serde_fields toml omit_null" {
 
         pub const serde_fields = .{
             .note = .{
-                .toml = .{ .omit_null = true },
+                .toml = .{ .serialize = .{ .omit_null = true } },
             },
         };
     };
@@ -1281,7 +1281,10 @@ test "serde_fields toml skip with default" {
 
         pub const serde_fields = .{
             .secret = .{
-                .toml = .{ .skip = true },
+                .toml = .{
+                    .serialize = .{ .skip = true },
+                    .deserialize = .{ .skip = true },
+                },
             },
         };
     };

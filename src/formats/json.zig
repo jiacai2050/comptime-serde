@@ -184,7 +184,7 @@ pub fn Serde(comptime T: type) type {
                         };
                         inline for (struct_info.fields, 0..) |field, index| {
                             if (common.matchesInputKey(.json, T, field.name, key)) {
-                                const config = common.fieldConfig(.json, T, field.name);
+                                const config = common.deserializeConfig(.json, T, field.name);
                                 if (config.skip) {
                                     try scanner.skipValue();
                                     break;
@@ -636,8 +636,8 @@ test "serde_fields json rename and alias" {
         pub const serde_fields = .{
             .name = .{
                 .json = .{
-                    .rename = "userName",
-                    .alias = &.{"username"},
+                    .serialize = .{ .rename = "userName" },
+                    .deserialize = .{ .rename = "userName", .alias = &.{"username"} },
                 },
             },
         };
@@ -663,7 +663,7 @@ test "serde_fields json omit_null" {
 
         pub const serde_fields = .{
             .note = .{
-                .json = .{ .omit_null = true },
+                .json = .{ .serialize = .{ .omit_null = true } },
             },
         };
     };
@@ -682,7 +682,10 @@ test "serde_fields json skip with default" {
 
         pub const serde_fields = .{
             .secret = .{
-                .json = .{ .skip = true },
+                .json = .{
+                    .serialize = .{ .skip = true },
+                    .deserialize = .{ .skip = true },
+                },
             },
         };
     };
