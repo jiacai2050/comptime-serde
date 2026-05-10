@@ -10,6 +10,10 @@
 - [Field Options](./field-options.md)
 - [Formats](./formats.md)
 
+# Reference
+
+- [API Reference](./apidocs/index.html)
+
 # Tools
 
 - [serde-gen CLI](./serde-gen.md)

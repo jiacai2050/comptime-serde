@@ -23,6 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+
       - name: Install mdbook
         uses: peaceiris/actions-mdbook@v2
         with:
@@ -30,7 +33,7 @@ jobs:
 
       - name: Build
         run: |
-          cd docs && mdbook build
+          make docs
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5

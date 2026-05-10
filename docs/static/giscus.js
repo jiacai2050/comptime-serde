@@ -1,5 +1,5 @@
 function appendGiscusScript() {
-  const pageDiv = document.querySelector('#content > main');
+  const pageDiv = document.querySelector('#mdbook-content > main');
 
   if (!pageDiv) {
     console.error('Could not find div with class "page"');

@@ -19,6 +19,10 @@ Define your struct once, automatically serialize/deserialize across JSON, TOML, 
 - **Ergonomic field options**: Rename fields, skip fields, accept aliases, and omit nulls — all configured via a single `serde_fields` declaration on your type.
 - **Arena-backed deserialization**: Deserialized values are returned in a `Parsed(T)` wrapper with an arena allocator. Call `deinit()` to free everything at once.
 
+## API Reference
+
+Auto-generated API docs for every public type and function are available at [apidocs](./apidocs/index.html).
+
 ## Requirements
 
 - Zig 0.16.0 or later

@@ -10,11 +10,26 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // 1. Generate documentation and install it to `prefix/docs`
+    const doc_obj = b.addObject(.{
+        .name = "docs",
+        .root_module = mod,
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = doc_obj.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    const docs_step = b.step("docs", "Generate documentation");
+    docs_step.dependOn(&install_docs.step);
+
+    // 2. Run unit tests
     const tests = b.addTest(.{ .root_module = mod });
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 
+    // 3. Build the CLI tool, which depends on the `zigcli` package.
     if (b.lazyDependency("zigcli", .{
         .target = target,
         .optimize = optimize,

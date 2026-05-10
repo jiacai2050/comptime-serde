@@ -11,6 +11,10 @@ test:
 
 docs:
 	zig build docs
+	rm -rf docs/book
+	cd docs && mdbook build
+	rm -rf docs/book/apidocs
+	mv zig-out/docs docs/book/apidocs
 
 serve:
 	cd docs && mdbook serve
