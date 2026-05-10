@@ -16,8 +16,9 @@ Convenience `make` targets are also used in CI:
 Single-test workflow:
 
 - The main test entrypoint is aggregated through `src/root.zig` + `std.testing.refAllDecls`, so `zig build test` runs the full suite.
-- For focused local debugging, run a file directly with a filter, e.g.:
-  `zig test src/formats/json.zig --test-filter "serialize bool"`
+- Do not assume individual test files can be run directly; use the aggregated test entrypoint instead.
+- For focused local debugging, run the suite with a test filter, e.g.:
+  `zig build test --test-filter "serialize bool"`
 
 ## High-level architecture
 
