@@ -7,12 +7,14 @@ pub fn Serde(comptime T: type) type {
     return struct {
         /// Writes `value` as YAML to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
+            comptime common.validateFieldConfigs(.yaml, T);
             try writeValue(writer, value, 0);
         }
 
         /// Parses `input` as YAML into a `Parsed(T)`.
         /// Caller must call `deinit()` to free all allocated memory.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+            comptime common.validateFieldConfigs(.yaml, T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
@@ -41,12 +43,17 @@ fn writeValue(writer: *std.Io.Writer, value: anytype, indent: usize) !void {
     const info = @typeInfo(T);
     switch (info) {
         .@"struct" => |struct_info| {
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (index > 0 or indent > 0) {
-                    try writeIndent(writer, indent);
+            var wrote_any = false;
+            inline for (struct_info.fields) |field| {
+                const field_value = @field(value, field.name);
+                if (common.shouldIncludeField(.yaml, T, field.name, field_value)) {
+                    if (wrote_any or indent > 0) {
+                        try writeIndent(writer, indent);
+                    }
+                    wrote_any = true;
+                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field.name)});
+                    try writeFieldValue(writer, field_value, indent);
                 }
-                try writer.print("{s}:", .{field.name});
-                try writeFieldValue(writer, @field(value, field.name), indent);
             }
         },
         else => @compileError("top-level YAML value must be a struct, got: " ++ @typeName(T)),
@@ -152,13 +159,19 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
         },
         .@"struct" => |struct_info| {
             // First field on same line as "- ", rest indented.
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (index > 0) {
-                    try writeIndent(writer, indent + 2);
+            var wrote_any = false;
+            inline for (struct_info.fields) |field| {
+                const field_value = @field(value, field.name);
+                if (common.shouldIncludeField(.yaml, T, field.name, field_value)) {
+                    if (wrote_any) {
+                        try writeIndent(writer, indent + 2);
+                    }
+                    wrote_any = true;
+                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field.name)});
+                    try writeFieldValue(writer, field_value, indent + 2);
                 }
-                try writer.print("{s}:", .{field.name});
-                try writeFieldValue(writer, @field(value, field.name), indent + 2);
             }
+            if (!wrote_any) try writer.writeByte('\n');
         },
         .@"enum" => {
             try writer.writeAll(@tagName(value));
@@ -335,7 +348,13 @@ fn parseValue(
                 const after_colon = std.mem.trimStart(u8, trimmed[colon_pos + 1 ..], " ");
 
                 inline for (struct_info.fields, 0..) |field, index| {
-                    if (std.mem.eql(u8, field.name, key)) {
+                    if (common.matchesInputKey(.yaml, T, field.name, key)) {
+                        const config = common.deserializeConfig(.yaml, T, field.name);
+                        if (config.skip) {
+                            pos.* += 1;
+                            skipNestedBlock(all_lines, pos, line_indent);
+                            break;
+                        }
                         if (fields_seen[index]) return error.DuplicateField;
                         pos.* += 1;
                         const parsed = try parseFieldValue(
@@ -357,16 +376,7 @@ fn parseValue(
                 }
             }
 
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (!fields_seen[index]) {
-                    if (field.default_value_ptr) |default_ptr| {
-                        const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                        @field(result, field.name) = ptr.*;
-                    } else {
-                        return error.MissingField;
-                    }
-                }
-            }
+            try common.fillMissingFields(.yaml, T, &result, &fields_seen);
             return result;
         },
         else => @compileError("top-level YAML parse must target a struct, got: " ++ @typeName(T)),
@@ -636,7 +646,12 @@ fn parseSequenceItem(
             const after_colon = std.mem.trimStart(u8, item_content[colon_pos + 1 ..], " ");
 
             inline for (struct_info.fields, 0..) |field, index| {
-                if (std.mem.eql(u8, field.name, key)) {
+                if (common.matchesInputKey(.yaml, T, field.name, key)) {
+                    const config = common.deserializeConfig(.yaml, T, field.name);
+                    if (config.skip) {
+                        skipNestedBlock(all_lines, pos, item_indent + 2);
+                        break;
+                    }
                     if (fields_seen[index]) return error.DuplicateField;
                     const parsed = try parseFieldValue(
                         field.type,
@@ -678,7 +693,12 @@ fn parseSequenceItem(
                 pos.* += 1;
 
                 inline for (struct_info.fields, 0..) |field, index| {
-                    if (std.mem.eql(u8, field.name, kv_key)) {
+                    if (common.matchesInputKey(.yaml, T, field.name, kv_key)) {
+                        const config = common.deserializeConfig(.yaml, T, field.name);
+                        if (config.skip) {
+                            skipNestedBlock(all_lines, pos, line_indent);
+                            break;
+                        }
                         if (fields_seen[index]) return error.DuplicateField;
                         const parsed = try parseFieldValue(
                             field.type,
@@ -697,16 +717,7 @@ fn parseSequenceItem(
                 }
             }
 
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (!fields_seen[index]) {
-                    if (field.default_value_ptr) |default_ptr| {
-                        const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                        @field(result, field.name) = ptr.*;
-                    } else {
-                        return error.MissingField;
-                    }
-                }
-            }
+            try common.fillMissingFields(.yaml, T, &result, &fields_seen);
             return result;
         },
         else => @compileError("unsupported sequence item type: " ++ @typeName(T)),
@@ -1307,4 +1318,89 @@ test "error: invalid enum value" {
     const serde = Serde(Data);
     const result = serde.deserialize(std.testing.allocator, "status: unknown\n");
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "serde_fields yaml rename and alias" {
+    const Data = struct {
+        name: []const u8,
+
+        pub const serde_fields = .{
+            .name = .{
+                .yaml = .{
+                    .serialize = .{ .rename = "user-name" },
+                    .deserialize = .{ .rename = "user-name", .alias = &.{"username"} },
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .name = "alice" });
+    try std.testing.expectEqualStrings(
+        \\user-name: alice
+        \\
+    , writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\username: bob
+    );
+    defer result.deinit();
+    try std.testing.expectEqualStrings("bob", result.value.name);
+}
+
+test "serde_fields yaml omit_null" {
+    const Data = struct {
+        id: u32,
+        note: ?[]const u8 = null,
+
+        pub const serde_fields = .{
+            .note = .{
+                .yaml = .{ .serialize = .{ .omit_null = true } },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 1, .note = null });
+    try std.testing.expectEqualStrings(
+        \\id: 1
+        \\
+    , writer.buffered());
+}
+
+test "serde_fields yaml skip with default" {
+    const Data = struct {
+        id: u32,
+        secret: []const u8 = "hidden",
+
+        pub const serde_fields = .{
+            .secret = .{
+                .yaml = .{
+                    .serialize = .{ .skip = true },
+                    .deserialize = .{ .skip = true },
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 7, .secret = "token" });
+    try std.testing.expectEqualStrings(
+        \\id: 7
+        \\
+    , writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\id: 9
+        \\secret: ignored
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(@as(u32, 9), result.value.id);
+    try std.testing.expectEqualStrings("hidden", result.value.secret);
 }

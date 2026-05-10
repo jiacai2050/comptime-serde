@@ -12,7 +12,10 @@ test:
 docs:
 	zig build docs
 
+serve:
+	cd docs && mdbook serve
+
 clean:
 	rm -rf zig-cache zig-out
 
-.PHONY: fix lint test docs clean
+.PHONY: fix lint test docs serve clean

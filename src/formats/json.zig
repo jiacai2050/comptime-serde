@@ -7,6 +7,7 @@ pub fn Serde(comptime T: type) type {
     return struct {
         /// Writes `value` as JSON to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
+            comptime common.validateFieldConfigs(.json, T);
             const info = @typeInfo(T);
             switch (info) {
                 .bool => try writer.writeAll(if (value) "true" else "false"),
@@ -57,12 +58,17 @@ pub fn Serde(comptime T: type) type {
                 },
                 .@"struct" => |struct_info| {
                     try writer.writeByte('{');
-                    inline for (struct_info.fields, 0..) |field, index| {
-                        if (index > 0) try writer.writeByte(',');
-                        try writeString(writer, field.name);
-                        try writer.writeByte(':');
-                        const FieldSerializer = Serde(field.type);
-                        try FieldSerializer.serialize(writer, @field(value, field.name));
+                    var first = true;
+                    inline for (struct_info.fields) |field| {
+                        const field_value = @field(value, field.name);
+                        if (common.shouldIncludeField(.json, T, field.name, field_value)) {
+                            if (!first) try writer.writeByte(',');
+                            first = false;
+                            try writeString(writer, common.serializedFieldName(.json, T, field.name));
+                            try writer.writeByte(':');
+                            const FieldSerializer = Serde(field.type);
+                            try FieldSerializer.serialize(writer, field_value);
+                        }
                     }
                     try writer.writeByte('}');
                 },
@@ -74,6 +80,7 @@ pub fn Serde(comptime T: type) type {
         /// Parses `input` as JSON into a `Parsed(T)` that owns all allocated memory.
         /// Caller must call `deinit()`.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+            comptime common.validateFieldConfigs(.json, T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
@@ -176,7 +183,12 @@ pub fn Serde(comptime T: type) type {
                             else => return error.UnexpectedToken,
                         };
                         inline for (struct_info.fields, 0..) |field, index| {
-                            if (std.mem.eql(u8, field.name, key)) {
+                            if (common.matchesInputKey(.json, T, field.name, key)) {
+                                const config = common.deserializeConfig(.json, T, field.name);
+                                if (config.skip) {
+                                    try scanner.skipValue();
+                                    break;
+                                }
                                 if (fields_seen[index]) return error.DuplicateField;
                                 const FieldParser = Serde(field.type);
                                 const parsed = try FieldParser.parseValue(scanner, allocator);
@@ -188,16 +200,7 @@ pub fn Serde(comptime T: type) type {
                             try scanner.skipValue();
                         }
                     }
-                    inline for (struct_info.fields, 0..) |field, index| {
-                        if (!fields_seen[index]) {
-                            if (field.default_value_ptr) |default_ptr| {
-                                const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                                @field(result, field.name) = ptr.*;
-                            } else {
-                                return error.MissingField;
-                            }
-                        }
-                    }
+                    try common.fillMissingFields(.json, T, &result, &fields_seen);
                     return result;
                 },
                 .@"enum" => |enum_info| {
@@ -624,4 +627,79 @@ test "error: invalid enum value" {
         \\{"status":"unknown"}
     );
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "serde_fields json rename and alias" {
+    const Data = struct {
+        name: []const u8,
+
+        pub const serde_fields = .{
+            .name = .{
+                .json = .{
+                    .serialize = .{ .rename = "userName" },
+                    .deserialize = .{ .rename = "userName", .alias = &.{"username"} },
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .name = "alice" });
+    try std.testing.expectEqualStrings("{\"userName\":\"alice\"}", writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\{"username":"bob"}
+    );
+    defer result.deinit();
+    try std.testing.expectEqualStrings("bob", result.value.name);
+}
+
+test "serde_fields json omit_null" {
+    const Data = struct {
+        id: u32,
+        note: ?[]const u8 = null,
+
+        pub const serde_fields = .{
+            .note = .{
+                .json = .{ .serialize = .{ .omit_null = true } },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 1, .note = null });
+    try std.testing.expectEqualStrings("{\"id\":1}", writer.buffered());
+}
+
+test "serde_fields json skip with default" {
+    const Data = struct {
+        id: u32,
+        secret: []const u8 = "hidden",
+
+        pub const serde_fields = .{
+            .secret = .{
+                .json = .{
+                    .serialize = .{ .skip = true },
+                    .deserialize = .{ .skip = true },
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 7, .secret = "token" });
+    try std.testing.expectEqualStrings("{\"id\":7}", writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\{"id":9,"secret":"ignored"}
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(@as(u32, 9), result.value.id);
+    try std.testing.expectEqualStrings("hidden", result.value.secret);
 }

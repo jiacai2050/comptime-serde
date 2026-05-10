@@ -7,12 +7,14 @@ pub fn Serde(comptime T: type) type {
     return struct {
         /// Writes `value` as TOML to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
+            comptime common.validateFieldConfigs(.toml, T);
             try writeTable(writer, value);
         }
 
         /// Parses `input` as TOML into a `Parsed(T)` that owns all allocated memory.
         /// Caller must call `deinit()`.
         pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+            comptime common.validateFieldConfigs(.toml, T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
@@ -37,57 +39,81 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
         .@"struct" => |struct_info| {
             // Pass 1: write key-value pairs (primitives, strings, inline arrays).
             inline for (struct_info.fields) |field| {
-                const field_type_info = @typeInfo(field.type);
-                switch (field_type_info) {
-                    .@"struct" => {}, // handled in pass 2
-                    .pointer => |pointer_info| {
-                        if (pointer_info.size == .slice and pointer_info.child == u8) {
-                            // String slice → inline KV.
-                            try writeKeyValue(writer, field.name, @field(value, field.name));
-                        } else if (pointer_info.size == .slice) {
-                            // Non-string slice: inline if primitives, table array if structs.
-                            const child_info = @typeInfo(pointer_info.child);
-                            if (child_info != .@"struct") {
-                                try writeKeyValue(writer, field.name, @field(value, field.name));
+                const field_key = common.serializedFieldName(.toml, T, field.name);
+                const field_value = @field(value, field.name);
+                if (common.shouldIncludeField(.toml, T, field.name, field_value)) {
+                    const field_type_info = @typeInfo(field.type);
+                    switch (field_type_info) {
+                        .@"struct" => {}, // handled in pass 2
+                        .optional => |optional_info| {
+                            // Optional struct: handled in pass 2; optional primitives: write inline.
+                            if (@typeInfo(optional_info.child) == .@"struct") {
+                                // handled in pass 2
+                            } else {
+                                try writeKeyValue(writer, field_key, field_value);
                             }
-                        }
-                    },
-                    else => {
-                        try writeKeyValue(writer, field.name, @field(value, field.name));
-                    },
+                        },
+                        .pointer => |pointer_info| {
+                            if (pointer_info.size == .slice and pointer_info.child == u8) {
+                                // String slice → inline KV.
+                                try writeKeyValue(writer, field_key, field_value);
+                            } else if (pointer_info.size == .slice) {
+                                // Non-string slice: inline if primitives, table array if structs.
+                                const child_info = @typeInfo(pointer_info.child);
+                                if (child_info != .@"struct") {
+                                    try writeKeyValue(writer, field_key, field_value);
+                                }
+                            }
+                        },
+                        else => {
+                            try writeKeyValue(writer, field_key, field_value);
+                        },
+                    }
                 }
             }
             // Pass 2: write [table] and [[array]] sections.
             inline for (struct_info.fields) |field| {
-                const field_type_info = @typeInfo(field.type);
-                switch (field_type_info) {
-                    .@"struct" => {
-                        try writer.print("[{s}]\n", .{field.name});
-                        try writeTable(writer, @field(value, field.name));
-                    },
-                    .pointer => |pointer_info| {
-                        if (pointer_info.size == .slice and pointer_info.child != u8) {
-                            const child_info = @typeInfo(pointer_info.child);
-                            if (child_info == .@"struct") {
-                                for (@field(value, field.name)) |item| {
-                                    try writer.print("[[{s}]]\n", .{field.name});
-                                    try writeTable(writer, item);
+                const field_key = common.serializedFieldName(.toml, T, field.name);
+                const field_value = @field(value, field.name);
+                if (common.shouldIncludeField(.toml, T, field.name, field_value)) {
+                    const field_type_info = @typeInfo(field.type);
+                    switch (field_type_info) {
+                        .@"struct" => {
+                            try writer.print("[{s}]\n", .{field_key});
+                            try writeTable(writer, field_value);
+                        },
+                        .optional => |optional_info| {
+                            if (@typeInfo(optional_info.child) == .@"struct") {
+                                if (field_value) |present| {
+                                    try writer.print("[{s}]\n", .{field_key});
+                                    try writeTable(writer, present);
                                 }
                             }
-                        }
-                    },
-                    .array => |array_info| {
-                        if (array_info.child != u8) {
-                            const child_info = @typeInfo(array_info.child);
-                            if (child_info == .@"struct") {
-                                for (@field(value, field.name)) |item| {
-                                    try writer.print("[[{s}]]\n", .{field.name});
-                                    try writeTable(writer, item);
+                        },
+                        .pointer => |pointer_info| {
+                            if (pointer_info.size == .slice and pointer_info.child != u8) {
+                                const child_info = @typeInfo(pointer_info.child);
+                                if (child_info == .@"struct") {
+                                    for (field_value) |item| {
+                                        try writer.print("[[{s}]]\n", .{field_key});
+                                        try writeTable(writer, item);
+                                    }
                                 }
                             }
-                        }
-                    },
-                    else => {},
+                        },
+                        .array => |array_info| {
+                            if (array_info.child != u8) {
+                                const child_info = @typeInfo(array_info.child);
+                                if (child_info == .@"struct") {
+                                    for (field_value) |item| {
+                                        try writer.print("[[{s}]]\n", .{field_key});
+                                        try writeTable(writer, item);
+                                    }
+                                }
+                            }
+                        },
+                        else => {},
+                    }
                 }
             }
         },
@@ -95,7 +121,7 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
     }
 }
 
-fn writeKeyValue(writer: *std.Io.Writer, comptime key: []const u8, value: anytype) !void {
+fn writeKeyValue(writer: *std.Io.Writer, key: []const u8, value: anytype) !void {
     try writer.print("{s} = ", .{key});
     try writeValue(writer, value);
     try writer.writeByte('\n');
@@ -268,16 +294,7 @@ fn parseStructFull(
                 line_ptr.* = lines.next();
             }
 
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (!fields_seen[index]) {
-                    if (field.default_value_ptr) |default_ptr| {
-                        const ptr: *const field.type = @ptrCast(@alignCast(default_ptr));
-                        @field(result, field.name) = ptr.*;
-                    } else {
-                        return error.MissingField;
-                    }
-                }
-            }
+            try common.fillMissingFields(.toml, T, &result, &fields_seen);
             return result;
         },
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -443,7 +460,9 @@ fn parseKvLineWithString(
 ) !void {
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, key)) {
+        if (common.matchesInputKey(.toml, T, field.name, key)) {
+            const config = common.deserializeConfig(.toml, T, field.name);
+            if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
             const is_string_slice = field_info == .pointer and
@@ -484,12 +503,29 @@ fn dispatchTable(
     const struct_info = @typeInfo(T).@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, table_name)) {
+        if (common.matchesInputKey(.toml, T, field.name, table_name)) {
+            const config = common.deserializeConfig(.toml, T, field.name);
+            if (config.skip) {
+                skipSection(lines, line_ptr);
+                return;
+            }
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
             if (field_info == .@"struct") {
                 const parsed = try parseStructFull(
                     field.type,
+                    allocator,
+                    lines,
+                    line_ptr,
+                    false,
+                );
+                @field(result, field.name) = parsed;
+                fields_seen[index] = true;
+                return;
+            }
+            if (field_info == .optional and @typeInfo(field_info.optional.child) == .@"struct") {
+                const parsed = try parseStructFull(
+                    field_info.optional.child,
                     allocator,
                     lines,
                     line_ptr,
@@ -516,7 +552,12 @@ fn dispatchTableArray(
     const struct_info = @typeInfo(T).@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, array_name)) {
+        if (common.matchesInputKey(.toml, T, field.name, array_name)) {
+            const config = common.deserializeConfig(.toml, T, field.name);
+            if (config.skip) {
+                skipSection(lines, line_ptr);
+                return;
+            }
             if (fields_seen[index]) return error.DuplicateField;
             const field_info = @typeInfo(field.type);
             if (field_info == .pointer and field_info.pointer.size == .slice) {
@@ -597,11 +638,22 @@ fn parseKvLine(
 ) !void {
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
-        if (std.mem.eql(u8, field.name, key)) {
+        if (common.matchesInputKey(.toml, T, field.name, key)) {
+            const config = common.deserializeConfig(.toml, T, field.name);
+            if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
             // Use a comptime switch to avoid instantiating parseTomlValue for struct types.
             switch (@typeInfo(field.type)) {
                 .@"struct" => {},
+                .optional => |optional_info| {
+                    if (@typeInfo(optional_info.child) == .@"struct") {
+                        // Optional structs are handled by dispatchTable for [table] sections.
+                    } else {
+                        const parsed = try parseTomlValue(field.type, allocator, raw_value);
+                        @field(result, field.name) = parsed;
+                        fields_seen[index] = true;
+                    }
+                },
                 .pointer => |pointer_info| {
                     if (pointer_info.size == .slice) {
                         const parsed = try parseTomlValue(field.type, allocator, raw_value);
@@ -1211,4 +1263,125 @@ test "error: invalid enum value" {
     const serde = Serde(Data);
     const result = serde.deserialize(std.testing.allocator, "status = \"unknown\"\n");
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+test "serde_fields toml rename and alias" {
+    const Data = struct {
+        name: []const u8,
+
+        pub const serde_fields = .{
+            .name = .{
+                .toml = .{
+                    .serialize = .{ .rename = "user_name" },
+                    .deserialize = .{ .rename = "user_name", .alias = &.{"username"} },
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .name = "alice" });
+    try std.testing.expectEqualStrings("user_name = \"alice\"\n", writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\username = "bob"
+    );
+    defer result.deinit();
+    try std.testing.expectEqualStrings("bob", result.value.name);
+}
+
+test "serde_fields toml omit_null" {
+    const Data = struct {
+        id: u32,
+        note: ?[]const u8 = null,
+
+        pub const serde_fields = .{
+            .note = .{
+                .toml = .{ .serialize = .{ .omit_null = true } },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 1, .note = null });
+    try std.testing.expectEqualStrings("id = 1\n", writer.buffered());
+}
+
+test "serde_fields toml skip with default" {
+    const Data = struct {
+        id: u32,
+        secret: []const u8 = "hidden",
+
+        pub const serde_fields = .{
+            .secret = .{
+                .toml = .{
+                    .serialize = .{ .skip = true },
+                    .deserialize = .{ .skip = true },
+                },
+            },
+        };
+    };
+    const serde = Serde(Data);
+
+    var serialized: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&serialized);
+    try serde.serialize(&writer, .{ .id = 7, .secret = "token" });
+    try std.testing.expectEqualStrings("id = 7\n", writer.buffered());
+
+    var result = try serde.deserialize(std.testing.allocator,
+        \\id = 9
+        \\secret = "ignored"
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(@as(u32, 9), result.value.id);
+    try std.testing.expectEqualStrings("hidden", result.value.secret);
+}
+
+test "roundtrip: optional struct" {
+    const Server = struct { host: []const u8, port: u16 };
+    const Config = struct { name: []const u8, server: ?Server };
+    const serde = Serde(Config);
+
+    // Non-null optional struct
+    const original = Config{
+        .name = "myapp",
+        .server = .{ .host = "localhost", .port = 8080 },
+    };
+
+    var buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try serde.serialize(&writer, original);
+    try std.testing.expectEqualStrings(
+        \\name = "myapp"
+        \\[server]
+        \\host = "localhost"
+        \\port = 8080
+        \\
+    , writer.buffered());
+
+    var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer restored.deinit();
+    try std.testing.expectEqualStrings("myapp", restored.value.name);
+    try std.testing.expect(restored.value.server != null);
+    try std.testing.expectEqualStrings("localhost", restored.value.server.?.host);
+    try std.testing.expectEqual(@as(u16, 8080), restored.value.server.?.port);
+
+    // Null optional struct
+    const null_original = Config{ .name = "myapp", .server = null };
+    var buf2: [512]u8 = undefined;
+    var writer2 = std.Io.Writer.fixed(&buf2);
+    try serde.serialize(&writer2, null_original);
+    try std.testing.expectEqualStrings(
+        \\name = "myapp"
+        \\
+    , writer2.buffered());
+
+    var restored2 = try serde.deserialize(std.testing.allocator, writer2.buffered());
+    defer restored2.deinit();
+    try std.testing.expectEqualStrings("myapp", restored2.value.name);
+    try std.testing.expect(restored2.value.server == null);
 }

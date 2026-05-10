@@ -1,3 +1,19 @@
+//! comptime-serde — compile-time serialization and deserialization for Zig.
+//!
+//! ```text
+//!                           ┌─────────────┐
+//!                           │  Zig Struct │
+//!                           └──────┬──────┘
+//!                                  │
+//!                       Serde(format, T)
+//!                                  │
+//!             ┌────────┬───────────┼───────────┬──────────┐
+//!             ▼        ▼           ▼           ▼          ▼
+//!         ┌──────┐ ┌──────┐  ┌────────┐  ┌────────┐ ┌──────────┐
+//!         │ JSON │ │ TOML │  │  YAML  │  │Protobuf│ │  ...     │
+//!         └──────┘ └──────┘  └────────┘  └────────┘ └──────────┘
+//! ```
+
 const std = @import("std");
 pub const json = @import("formats/json.zig");
 pub const toml = @import("formats/toml.zig");
@@ -5,8 +21,7 @@ pub const yaml = @import("formats/yaml.zig");
 pub const protobuf = @import("formats/protobuf.zig");
 const common = @import("formats/common.zig");
 
-/// Supported serialization formats.
-pub const Format = enum { json, toml, yaml, protobuf };
+pub const Format = common.Format;
 
 /// Returns a comptime-generated type with serialize/deserialize methods
 /// for `T` in the given `format`.
