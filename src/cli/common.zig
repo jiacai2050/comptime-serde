@@ -14,6 +14,7 @@ pub const FieldDef = struct {
 pub fn needsQuoting(name: []const u8) bool {
     if (name.len == 0) return true;
     if (name[0] >= '0' and name[0] <= '9') return true;
+    if (std.zig.Token.getKeyword(name) != null) return true;
     for (name) |char| {
         const is_alnum = (char >= 'a' and char <= 'z') or
             (char >= 'A' and char <= 'Z') or

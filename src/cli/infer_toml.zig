@@ -241,3 +241,20 @@ test "infer float and null" {
         \\
     , output);
 }
+
+test "infer keyword field names" {
+    const output = try generate(std.testing.allocator,
+        \\type = "server"
+        \\error = false
+        \\return = 1
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Root = struct {
+        \\    type: []const u8,
+        \\    @"error": bool,
+        \\    @"return": i64,
+        \\};
+        \\
+    , output);
+}
