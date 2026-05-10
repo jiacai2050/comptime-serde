@@ -1,6 +1,26 @@
 # Introduction
 
-**comptime-serde** is a compile-time serialization/deserialization library for Zig. All type dispatch happens at comptime via `@typeInfo`, with zero runtime overhead.
+![](https://img.shields.io/badge/zig%20version-0.16.0-F7A41D.svg)
+[![](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml/badge.svg)](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml)
+
+> **comptime-serde** is a compile-time serialization/deserialization library for Zig.
+
+Define your struct once, automatically serialize/deserialize across JSON, TOML, YAML, and Protobuf — zero runtime overhead, all type dispatch happens at comptime via `@typeInfo`.
+
+
+```
+                          ┌─────────────┐
+                          │  Zig Struct │
+                          └──────┬──────┘
+                                 │
+                      Serde(format, T)
+                                 │
+            ┌────────┬───────────┼───────────┬──────────┐
+            ▼        ▼           ▼           ▼          ▼
+        ┌──────┐ ┌──────┐  ┌────────┐  ┌────────┐ ┌──────────┐
+        │ JSON │ │ TOML │  │  YAML  │  │Protobuf│ │  ...     │
+        └──────┘ └──────┘  └────────┘  └────────┘ └──────────┘
+```
 
 ## Features
 
