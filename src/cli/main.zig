@@ -5,6 +5,7 @@ const structargs = @import("zigcli").structargs;
 const infer_json = @import("infer_json.zig");
 const infer_toml = @import("infer_toml.zig");
 const infer_yaml = @import("infer_yaml.zig");
+const infer_proto = @import("infer_proto.zig");
 
 const version_string = std.fmt.comptimePrint(
     \\serde-gen
@@ -23,7 +24,7 @@ const version_string = std.fmt.comptimePrint(
     @tagName(builtin.zig_backend),
 });
 
-const Format = enum { json, toml, yaml };
+const Format = enum { json, toml, yaml, proto };
 
 const Options = struct {
     format: ?Format = null,
@@ -37,7 +38,7 @@ const Options = struct {
         .version = .v,
     };
     pub const __messages__ = .{
-        .format = "Force format (json, toml, yaml). Auto-detected from extension if omitted.",
+        .format = "Force format (json, toml, yaml, proto). Auto-detected from extension if omitted.",
         .@"root-name" = "Name of the top-level struct.",
     };
 };
@@ -130,6 +131,7 @@ fn selectGenerator(format: Format) GenerateFn {
         .json => &infer_json.generate,
         .toml => &infer_toml.generate,
         .yaml => &infer_yaml.generate,
+        .proto => &infer_proto.generate,
     };
 }
 
@@ -157,6 +159,7 @@ fn detectFormat(path: []const u8) ?Format {
     if (std.mem.eql(u8, ext, ".json")) return .json;
     if (std.mem.eql(u8, ext, ".toml")) return .toml;
     if (std.mem.eql(u8, ext, ".yaml") or std.mem.eql(u8, ext, ".yml")) return .yaml;
+    if (std.mem.eql(u8, ext, ".proto")) return .proto;
     return null;
 }
 

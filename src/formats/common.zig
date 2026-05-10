@@ -60,10 +60,6 @@ pub const FormatFieldOptions = struct {
 pub const ProtobufFieldOptions = struct {
     /// Explicit proto field number instead of relying on declaration order (1-based).
     field_number: ?u32 = null,
-    /// Override packed encoding for repeated scalar fields.
-    @"packed": ?bool = null,
-    /// Mark field as deprecated (proto `deprecated = true`).
-    deprecated: bool = false,
 };
 
 /// Aggregated field options keyed by format, populated from `T.serde_fields`.
@@ -209,8 +205,6 @@ fn parseProtobufFieldOptions(comptime T: type, comptime field_name: []const u8, 
     }
     var options: ProtobufFieldOptions = .{};
     if (@hasField(meta_type, "field_number")) options.field_number = @field(protobuf_meta, "field_number");
-    if (@hasField(meta_type, "packed")) options.@"packed" = @field(protobuf_meta, "packed");
-    if (@hasField(meta_type, "deprecated")) options.deprecated = @field(protobuf_meta, "deprecated");
     return options;
 }
 
@@ -362,6 +356,75 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
             }
         }
     }
+}
+
+/// Validates protobuf field_number values for `T`:
+/// - field_number must be non-zero
+/// - field_number must be in range 1..2^29-1, excluding 19000..19999 (reserved)
+/// - no two fields may share the same field_number
+pub fn validateProtobufFieldNumbers(comptime T: type) void {
+    const info = @typeInfo(T);
+    if (info != .@"struct") return;
+    const struct_info = info.@"struct";
+
+    inline for (struct_info.fields, 0..) |field, index| {
+        const options = fieldOptions(T, field.name);
+        if (options.protobuf) |protobuf_options| {
+            if (protobuf_options.field_number) |number| {
+                if (number == 0) {
+                    @compileError("protobuf field_number must be non-zero on " ++ @typeName(T) ++ "." ++ field.name);
+                }
+                if (number >= 19000 and number <= 19999) {
+                    @compileError("protobuf field_number 19000-19999 is reserved on " ++ @typeName(T) ++ "." ++ field.name);
+                }
+                if (number > 536870911) {
+                    @compileError("protobuf field_number exceeds max 2^29-1 on " ++ @typeName(T) ++ "." ++ field.name);
+                }
+            }
+        }
+        // Check for duplicate field numbers.
+        const left_num = effectiveProtobufFieldNumber(T, index);
+        inline for (struct_info.fields, 0..) |right, right_index| {
+            if (right_index <= index) continue;
+            const right_num = effectiveProtobufFieldNumber(T, right_index);
+            if (left_num == right_num) {
+                @compileError("protobuf duplicate field_number " ++ std.fmt.comptimePrint("{d}", .{left_num}) ++ " on " ++ @typeName(T) ++ ": " ++ field.name ++ " and " ++ right.name);
+            }
+        }
+    }
+}
+
+/// Returns the effective protobuf field number for the field at `index` in `T`.
+fn effectiveProtobufFieldNumber(comptime T: type, comptime index: usize) u32 {
+    const struct_info = @typeInfo(T).@"struct";
+    const field = struct_info.fields[index];
+    const options = fieldOptions(T, field.name);
+    if (options.protobuf) |protobuf_options| {
+        return protobuf_options.field_number orelse @intCast(index + 1);
+    }
+    return @intCast(index + 1);
+}
+
+/// Writes `string` as a double-quoted JSON/TOML string with standard escapes.
+pub fn writeEscapedString(writer: *std.Io.Writer, string: []const u8) !void {
+    try writer.writeByte('"');
+    for (string) |char| {
+        switch (char) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (char < 0x20) {
+                    try writer.print("\\u{x:0>4}", .{char});
+                } else {
+                    try writer.writeByte(char);
+                }
+            },
+        }
+    }
+    try writer.writeByte('"');
 }
 
 /// Returns true if `field_name` should be included in serialized output:

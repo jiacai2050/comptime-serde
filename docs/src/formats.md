@@ -95,19 +95,31 @@ items:
 
 ## Protobuf
 
-Protobuf support is work in progress. Field numbers can be configured via `ProtobufFieldOptions`:
+Protobuf support is work in progress. Zig structs map to protobuf messages:
+
+- Structs → messages (field numbers assigned by declaration order, 1-based)
+- `bool` → bool
+- `u8`/`u16`/`u32` → uint32, `u64` → uint64
+- `i8`/`i16`/`i32` → sint32 (ZigZag), `i64` → sint64 (ZigZag)
+- `f32` → float (fixed32), `f64` → double (fixed64)
+- `[]const u8` → string/bytes
+- `[]const T` → repeated T (packed encoding for scalars)
+- `enum(u32)` → enum
+- `?T` → optional (omitted when null)
+
+Field numbers can be configured via `ProtobufFieldOptions` to override declaration order:
 
 ```zig
 pub const serde_fields = .{
     .user_name = .{
         .protobuf = .{
             .field_number = 1,
-            .packed = true,
-            .deprecated = false,
         },
     },
 };
 ```
+
+The `serde-gen` CLI can generate Zig structs from `.proto` files, including `serde_fields` with explicit field numbers. See [serde-gen CLI](./serde-gen.md#proto).
 
 ## Cross-Format Configuration
 

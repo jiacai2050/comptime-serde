@@ -97,6 +97,26 @@ name: myapp
 port: 8080
 EOF
 
+# --- Proto ---
+
+run_test "proto flat struct" \
+"const Server = struct {
+    host: []const u8,
+    port: u32,
+    pub const serde_fields = .{
+        .host = .{ .protobuf = .{ .field_number = 1 } },
+        .port = .{ .protobuf = .{ .field_number = 2 } },
+    };
+};" \
+"$SERDE_GEN" --format proto -- - <<'EOF'
+syntax = "proto3";
+
+message Server {
+  string host = 1;
+  uint32 port = 2;
+}
+EOF
+
 # --- File input ---
 
 TMP_DIR=$(mktemp -d)

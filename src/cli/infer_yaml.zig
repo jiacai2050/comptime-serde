@@ -1,14 +1,7 @@
 const std = @import("std");
-
-const StructDef = struct {
-    name: []const u8,
-    fields: std.ArrayList(FieldDef),
-};
-
-const FieldDef = struct {
-    name: []const u8,
-    type_name: []const u8,
-};
+const common = @import("common.zig");
+const StructDefinition = common.StructDefinition;
+const FieldDefinition = common.FieldDefinition;
 
 /// Infers Zig struct definitions from YAML content.
 /// Returns the generated source code as a string.
@@ -17,13 +10,13 @@ pub fn generate(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    var structs = std.ArrayList(StructDef).empty;
+    var structs = std.ArrayList(StructDefinition).empty;
     const all_lines = try splitLines(arena_alloc, content);
 
     var pos: usize = 0;
     try parseMapping(arena_alloc, all_lines, &pos, 0, "Root", &structs);
 
-    return try renderStructs(allocator, arena_alloc, structs.items);
+    return try common.renderStructs(allocator, arena_alloc, structs.items);
 }
 
 fn splitLines(allocator: std.mem.Allocator, content: []const u8) ![]const []const u8 {
@@ -48,9 +41,9 @@ fn parseMapping(
     pos: *usize,
     base_indent: usize,
     name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) InferError!void {
-    var fields = std.ArrayList(FieldDef).empty;
+    var fields = std.ArrayList(FieldDefinition).empty;
 
     while (pos.* < all_lines.len) {
         const line = all_lines[pos.*];
@@ -97,7 +90,7 @@ fn inferFieldType(
     parent_indent: usize,
     inline_value: []const u8,
     field_name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) InferError![]const u8 {
     // Nested struct: empty inline value + indented content below.
     if (inline_value.len == 0) {
@@ -118,7 +111,7 @@ fn inferFieldType(
                 }
             }
             // Nested mapping.
-            const struct_name = try capitalizeFirst(allocator, field_name);
+            const struct_name = try common.capitalizeFirst(allocator, field_name);
             try parseMapping(allocator, all_lines, pos, parent_indent + 2, struct_name, structs);
             return struct_name;
         }
@@ -140,7 +133,7 @@ fn inferSequenceType(
     pos: *usize,
     parent_indent: usize,
     field_name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) ![]const u8 {
     const seq_indent = parent_indent + 2;
 
@@ -155,7 +148,7 @@ fn inferSequenceType(
                 // Check if it's a struct item (has a colon).
                 if (findColon(item_content) != null) {
                     // Struct sequence — parse first item to define the struct.
-                    const struct_name = try capitalizeFirst(allocator, field_name);
+                    const struct_name = try common.capitalizeFirst(allocator, field_name);
                     try parseSequenceItemStruct(
                         allocator,
                         all_lines,
@@ -184,7 +177,7 @@ fn parseSequenceItemStruct(
     pos: *usize,
     seq_indent: usize,
     name: []const u8,
-    structs: *std.ArrayList(StructDef),
+    structs: *std.ArrayList(StructDefinition),
 ) !void {
     // Check if already defined.
     for (structs.items) |s| {
@@ -194,7 +187,7 @@ fn parseSequenceItemStruct(
         }
     }
 
-    var fields = std.ArrayList(FieldDef).empty;
+    var fields = std.ArrayList(FieldDefinition).empty;
 
     // Parse first item.
     if (pos.* < all_lines.len) {
@@ -247,35 +240,9 @@ fn inferScalarType(value: []const u8) []const u8 {
     if (value.len == 0) return "[]const u8";
     if (std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "false")) return "bool";
     if (std.mem.eql(u8, value, "null") or std.mem.eql(u8, value, "~")) return "?[]const u8";
-    if (isInteger(value)) return "i64";
-    if (isFloat(value)) return "f64";
+    if (common.isInteger(value)) return "i64";
+    if (common.isFloat(value)) return "f64";
     return "[]const u8";
-}
-
-fn isInteger(value: []const u8) bool {
-    var start: usize = 0;
-    if (value.len > 0 and (value[0] == '-' or value[0] == '+')) start = 1;
-    if (start >= value.len) return false;
-    for (value[start..]) |char| {
-        if (char < '0' or char > '9') return false;
-    }
-    return true;
-}
-
-fn isFloat(value: []const u8) bool {
-    var has_dot = false;
-    var start: usize = 0;
-    if (value.len > 0 and (value[0] == '-' or value[0] == '+')) start = 1;
-    if (start >= value.len) return false;
-    for (value[start..]) |char| {
-        if (char == '.') {
-            if (has_dot) return false;
-            has_dot = true;
-        } else if (char < '0' or char > '9') {
-            return false;
-        }
-    }
-    return has_dot;
 }
 
 fn skipBlock(all_lines: []const []const u8, pos: *usize, block_indent: usize) void {
@@ -334,73 +301,6 @@ fn peekNextIndent(all_lines: []const []const u8, start: usize) ?usize {
         return lineIndent(line);
     }
     return null;
-}
-
-fn renderStructs(
-    caller_alloc: std.mem.Allocator,
-    arena_alloc: std.mem.Allocator,
-    structs: []const StructDef,
-) ![]const u8 {
-    var output = std.ArrayList(u8).empty;
-
-    for (structs) |struct_def| {
-        const capitalized = capitalizeFirst(arena_alloc, struct_def.name) catch struct_def.name;
-        const formatted_name = formatName(arena_alloc, capitalized) catch capitalized;
-        const header = try std.fmt.allocPrint(
-            arena_alloc,
-            "const {s} = struct {{\n",
-            .{formatted_name},
-        );
-        try output.appendSlice(arena_alloc, header);
-
-        for (struct_def.fields.items) |field| {
-            const formatted_field = formatName(arena_alloc, field.name) catch field.name;
-            const line = try std.fmt.allocPrint(
-                arena_alloc,
-                "    {s}: {s},\n",
-                .{ formatted_field, field.type_name },
-            );
-            try output.appendSlice(arena_alloc, line);
-        }
-        try output.appendSlice(arena_alloc, "};\n\n");
-    }
-
-    while (output.items.len > 0 and output.items[output.items.len - 1] == '\n') {
-        output.items.len -= 1;
-    }
-    try output.append(arena_alloc, '\n');
-
-    return try caller_alloc.dupe(u8, output.items);
-}
-
-fn needsQuoting(name: []const u8) bool {
-    if (name.len == 0) return true;
-    if (name[0] >= '0' and name[0] <= '9') return true;
-    for (name) |char| {
-        const is_alnum = (char >= 'a' and char <= 'z') or
-            (char >= 'A' and char <= 'Z') or
-            (char >= '0' and char <= '9') or
-            char == '_';
-        if (!is_alnum) return true;
-    }
-    return false;
-}
-
-fn formatName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    if (needsQuoting(name)) {
-        return try std.fmt.allocPrint(allocator, "@\"{s}\"", .{name});
-    }
-    return name;
-}
-
-fn capitalizeFirst(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    if (name.len == 0) return name;
-    if (name[0] >= 'a' and name[0] <= 'z') {
-        const result = try allocator.dupe(u8, name);
-        result[0] -= 32;
-        return result;
-    }
-    return name;
 }
 
 // ==================== Tests ====================
@@ -491,6 +391,23 @@ test "infer float and null" {
         \\const Root = struct {
         \\    ratio: f64,
         \\    missing: ?[]const u8,
+        \\};
+        \\
+    , output);
+}
+
+test "infer keyword field names" {
+    const output = try generate(std.testing.allocator,
+        \\type: server
+        \\error: false
+        \\return: 1
+    );
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings(
+        \\const Root = struct {
+        \\    type: []const u8,
+        \\    @"error": bool,
+        \\    @"return": i64,
         \\};
         \\
     , output);

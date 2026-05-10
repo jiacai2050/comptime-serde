@@ -4,8 +4,8 @@
     .version = "0.2.0",
     .dependencies = .{
         .zigcli = .{
-            .url = "git+https://github.com/jiacai2050/zigcli.git#76c5b533d44a13ce70bddd696378f904c9af5ac3",
-            .hash = "zigcli-0.6.1-ORC7jLRBBgAb-rLTyCIC6Ys0-hGJTfnnKwi6mZQ6lzt1",
+            .url = "git+https://github.com/jiacai2050/zigcli.git?ref=v0.6.2#35e013d209b18d0e9c1df85e7e2044e15bde22ad",
+            .hash = "zigcli-0.6.2-ORC7jMFFBgDegrwcsueXsOekZh-HHlKHLJQuostneMpS",
             .lazy = true,
         },
     },
