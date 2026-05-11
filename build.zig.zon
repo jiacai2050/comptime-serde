@@ -2,6 +2,7 @@
     .name = .comptime_serde,
     .fingerprint = 0xf93787381fe72637,
     .version = "0.2.0",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zigcli = .{
             .url = "git+https://github.com/jiacai2050/zigcli.git?ref=v0.6.2#35e013d209b18d0e9c1df85e7e2044e15bde22ad",

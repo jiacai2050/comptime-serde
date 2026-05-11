@@ -63,9 +63,9 @@ serde-gen config.json
 
 ## Documentation
 
-- User guide: [jiacai2050.github.io/comptime-serde](https://jiacai2050.github.io/comptime-serde/)
-- API reference: [jiacai2050.github.io/comptime-serde/apidocs](https://jiacai2050.github.io/comptime-serde/apidocs)
+- [User guide](https://jiacai2050.github.io/comptime-serde/)
+- [API reference](https://jiacai2050.github.io/comptime-serde/apidocs)
 
 ## License
 
-MIT
+[MIT](./LICENSE)
