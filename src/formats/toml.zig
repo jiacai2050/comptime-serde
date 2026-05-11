@@ -293,6 +293,7 @@ fn parseStructFull(
                         if (mode == .array_element) {
                             // We are inside an array element; a NEW [[array]] header
                             // means this element is finished. Return to the loop in parseTableArray.
+                            try common.fillMissingFields(T, &result, &fields_seen);
                             return result;
                         }
 
@@ -318,6 +319,7 @@ fn parseStructFull(
                         continue;
                     } else {
                         // In nested context: return to parent to let them try matching it.
+                        try common.fillMissingFields(T, &result, &fields_seen);
                         return result;
                     }
                 }
@@ -1480,4 +1482,39 @@ test "roundtrip: optional struct" {
     defer restored2.deinit();
     try std.testing.expectEqualStrings("myapp", restored2.value.name);
     try std.testing.expect(restored2.value.server == null);
+}
+
+test "error: missing required field in array element" {
+    const Config = struct {
+        items: []const struct { id: u32, name: []const u8 },
+    };
+    const serde = Serde(Config);
+    // Second [[items]] is missing required `id`; the following [[other]] header
+    // triggers the early return in .array_element mode, which must still call fillMissingFields.
+    const result = serde.deserialize(std.testing.allocator,
+        \\[[items]]
+        \\id = 1
+        \\name = "a"
+        \\[[items]]
+        \\name = "b"
+        \\[[other]]
+        \\x = 1
+    );
+    try std.testing.expectError(error.MissingField, result);
+}
+
+test "error: missing required field in nested table" {
+    const Config = struct {
+        server: struct { host: []const u8, port: u16 },
+    };
+    const serde = Serde(Config);
+    // [server] is missing required `port`; the following [other] header
+    // triggers the early return in .nested mode, which must still call fillMissingFields.
+    const result = serde.deserialize(std.testing.allocator,
+        \\[server]
+        \\host = "localhost"
+        \\[other]
+        \\x = 1
+    );
+    try std.testing.expectError(error.MissingField, result);
 }

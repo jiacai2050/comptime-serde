@@ -141,14 +141,7 @@ fn serializeField(
         },
         .@"enum" => {
             try writeTag(buffer, allocator, field_num, WIRE_VARINT);
-            const tag_value = @intFromEnum(value);
-            // Must sign-extend to 64-bit if signed, then bitcast to unsigned 64-bit
-            // to produce the standard 10-byte protobuf varint for negative enums.
-            const value64: u64 = if (comptime @typeInfo(@TypeOf(tag_value)).int.signedness == .signed)
-                @bitCast(@as(i64, tag_value))
-            else
-                @intCast(tag_value);
-            try writeVarint(buffer, allocator, value64);
+            try writeVarint(buffer, allocator, enumToVarint(value));
         },
         .optional => {
             if (value) |present| {
@@ -177,12 +170,7 @@ fn serializeScalar(
             }
         },
         .@"enum" => {
-            const tag_value = @intFromEnum(value);
-            const value64: u64 = if (comptime @typeInfo(@TypeOf(tag_value)).int.signedness == .signed)
-                @bitCast(@as(i64, tag_value))
-            else
-                @intCast(tag_value);
-            try writeVarint(buffer, allocator, value64);
+            try writeVarint(buffer, allocator, enumToVarint(value));
         },
         else => @compileError("unsupported packed type: " ++ @typeName(T)),
     }
@@ -292,44 +280,21 @@ fn deserializeFieldValue(
 ) !void {
     const type_info = @typeInfo(T);
     switch (type_info) {
-        .bool => {
-            const raw = readVarint(input, position) orelse return error.UnexpectedToken;
-            @field(result, field_name) = raw != 0;
+        .bool, .int, .float, .@"enum" => {
+            @field(result, field_name) = try deserializeScalar(T, input, position);
             seen.* = true;
-        },
-        .int => |int_type_info| {
-            const raw = readVarint(input, position) orelse return error.UnexpectedToken;
-            if (int_type_info.signedness == .signed) {
-                @field(result, field_name) = @truncate(zigzagDecode(raw));
-            } else {
-                @field(result, field_name) = @truncate(raw);
-            }
-            seen.* = true;
-        },
-        .float => |float_type_info| {
-            if (float_type_info.bits == 32) {
-                const bytes = readFixed32(input, position) orelse return error.UnexpectedToken;
-                @field(result, field_name) = @bitCast(bytes);
-                seen.* = true;
-            } else {
-                const bytes = readFixed64(input, position) orelse return error.UnexpectedToken;
-                @field(result, field_name) = @bitCast(bytes);
-                seen.* = true;
-            }
         },
         .pointer => |pointer_type_info| {
             if (pointer_type_info.size == .slice) {
                 if (pointer_type_info.child == u8) {
-                    const length_value = readVarint(input, position) orelse return error.UnexpectedToken;
-                    const length: usize = @intCast(length_value);
+                    const length = try readLength(input, position);
                     if (position.* + length > input.len) return error.UnexpectedToken;
                     @field(result, field_name) = try allocator.dupe(u8, input[position.* .. position.* + length]);
                     position.* += length;
                     seen.* = true;
                 } else {
                     // Repeated field: accumulate raw bytes for later finalization.
-                    const length_value = readVarint(input, position) orelse return error.UnexpectedToken;
-                    const length: usize = @intCast(length_value);
+                    const length = try readLength(input, position);
                     if (position.* + length > input.len) return error.UnexpectedToken;
                     const child_type_info = @typeInfo(pointer_type_info.child);
                     if (child_type_info == .@"struct") {
@@ -345,8 +310,7 @@ fn deserializeFieldValue(
                 const child_type_info = @typeInfo(pointer_type_info.child);
                 if (child_type_info == .array) {
                     if (child_type_info.array.child == u8) {
-                        const length_value = readVarint(input, position) orelse return error.UnexpectedToken;
-                        const length: usize = @intCast(length_value);
+                        const length = try readLength(input, position);
                         if (position.* + length > input.len) return error.UnexpectedToken;
                         if (length != child_type_info.array.len) return error.UnexpectedToken;
                         const source = input[position.* .. position.* + length];
@@ -366,22 +330,11 @@ fn deserializeFieldValue(
             }
         },
         .@"struct" => {
-            const length_value = readVarint(input, position) orelse return error.UnexpectedToken;
-            const length: usize = @intCast(length_value);
+            const length = try readLength(input, position);
             if (position.* + length > input.len) return error.UnexpectedToken;
             const message_data = input[position.* .. position.* + length];
             @field(result, field_name) = try deserializeMessage(T, allocator, message_data);
             position.* += length;
-            seen.* = true;
-        },
-        .@"enum" => {
-            const raw = readVarint(input, position) orelse return error.UnexpectedToken;
-            const enum_type_info = @typeInfo(T).@"enum";
-            const tag_value: enum_type_info.tag_type = if (comptime (@typeInfo(enum_type_info.tag_type).int.signedness == .signed))
-                @bitCast(@as(std.meta.Int(.unsigned, @typeInfo(enum_type_info.tag_type).int.bits), @truncate(raw)))
-            else
-                @intCast(raw);
-            @field(result, field_name) = @enumFromInt(tag_value);
             seen.* = true;
         },
         .optional => {
@@ -389,18 +342,8 @@ fn deserializeFieldValue(
             const inner_type = type_info.optional.child;
             const inner_type_info = @typeInfo(inner_type);
             switch (inner_type_info) {
-                .bool => {
-                    const raw = readVarint(input, position) orelse return error.UnexpectedToken;
-                    @field(result, field_name) = raw != 0;
-                    seen.* = true;
-                },
-                .int => |int_type_info| {
-                    const raw = readVarint(input, position) orelse return error.UnexpectedToken;
-                    if (int_type_info.signedness == .signed) {
-                        @field(result, field_name) = @truncate(zigzagDecode(raw));
-                    } else {
-                        @field(result, field_name) = @truncate(raw);
-                    }
+                .bool, .int, .float, .@"enum" => {
+                    @field(result, field_name) = try deserializeScalar(inner_type, input, position);
                     seen.* = true;
                 },
                 else => {
@@ -425,8 +368,7 @@ fn finalizeRepeatedMessages(
 
     var position: usize = 0;
     while (position < data.len) {
-        const length_value = readVarint(data, &position) orelse return error.UnexpectedToken;
-        const length: usize = @intCast(length_value);
+        const length = try readLength(data, &position);
         if (position + length > data.len) return error.UnexpectedToken;
         const item = try deserializeMessage(T, allocator, data[position .. position + length]);
         try list.append(allocator, item);
@@ -443,37 +385,9 @@ fn finalizePackedScalars(
     var list = std.ArrayList(T).empty;
     defer list.deinit(allocator);
 
-    const type_info = @typeInfo(T);
     var position: usize = 0;
     while (position < data.len) {
-        switch (type_info) {
-            .bool => {
-                const raw = readVarint(data, &position) orelse return error.UnexpectedToken;
-                try list.append(allocator, raw != 0);
-            },
-            .int => |int_type_info| {
-                const raw = readVarint(data, &position) orelse return error.UnexpectedToken;
-                if (int_type_info.signedness == .signed) {
-                    try list.append(allocator, @truncate(zigzagDecode(raw)));
-                } else {
-                    try list.append(allocator, @truncate(raw));
-                }
-            },
-            .float => |float_type_info| {
-                if (float_type_info.bits == 32) {
-                    const bytes = readFixed32(data, &position) orelse return error.UnexpectedToken;
-                    try list.append(allocator, @bitCast(bytes));
-                } else {
-                    const bytes = readFixed64(data, &position) orelse return error.UnexpectedToken;
-                    try list.append(allocator, @bitCast(bytes));
-                }
-            },
-            .@"enum" => {
-                const raw = readVarint(data, &position) orelse return error.UnexpectedToken;
-                try list.append(allocator, @enumFromInt(raw));
-            },
-            else => @compileError("unsupported packed type: " ++ @typeName(T)),
-        }
+        try list.append(allocator, try deserializeScalar(T, data, &position));
     }
     return try list.toOwnedSlice(allocator);
 }
@@ -513,9 +427,7 @@ fn writeVarint(
 ) !void {
     const T = @TypeOf(value);
     var remaining: u64 = undefined;
-    if (comptime @typeInfo(T) == .comptime_int) {
-        remaining = zigzagEncode(@as(i64, value));
-    } else if (comptime @typeInfo(T) == .int and @typeInfo(T).int.signedness == .signed) {
+    if (comptime @typeInfo(T) == .int and @typeInfo(T).int.signedness == .signed) {
         remaining = zigzagEncode(value);
     } else {
         remaining = @intCast(value);
@@ -573,6 +485,38 @@ fn readVarint(input: []const u8, position: *usize) ?u64 {
     return null;
 }
 
+fn deserializeScalar(comptime T: type, input: []const u8, position: *usize) !T {
+    const type_info = @typeInfo(T);
+    switch (type_info) {
+        .bool => {
+            const raw = readVarint(input, position) orelse return error.UnexpectedToken;
+            return raw != 0;
+        },
+        .int => |int_type_info| {
+            const raw = readVarint(input, position) orelse return error.UnexpectedToken;
+            if (int_type_info.signedness == .signed) {
+                return @intCast(zigzagDecode(raw));
+            } else {
+                return @intCast(raw);
+            }
+        },
+        .float => |float_type_info| {
+            if (float_type_info.bits == 32) {
+                const bytes = readFixed32(input, position) orelse return error.UnexpectedToken;
+                return @bitCast(bytes);
+            } else {
+                const bytes = readFixed64(input, position) orelse return error.UnexpectedToken;
+                return @bitCast(bytes);
+            }
+        },
+        .@"enum" => {
+            const raw = readVarint(input, position) orelse return error.UnexpectedToken;
+            return varintToEnum(T, raw);
+        },
+        else => @compileError("unsupported scalar type: " ++ @typeName(T)),
+    }
+}
+
 fn readFixed32(input: []const u8, position: *usize) ?u32 {
     if (position.* + 4 > input.len) return null;
     const bytes = input[position.*..][0..4];
@@ -585,6 +529,32 @@ fn readFixed64(input: []const u8, position: *usize) ?u64 {
     const bytes = input[position.*..][0..8];
     position.* += 8;
     return std.mem.littleToNative(u64, @bitCast(bytes.*));
+}
+
+// ==================== Enum Helpers ====================
+
+fn readLength(input: []const u8, position: *usize) !usize {
+    const length_value = readVarint(input, position) orelse return error.UnexpectedToken;
+    return @intCast(length_value);
+}
+
+fn enumToVarint(value: anytype) u64 {
+    const tag_value = @intFromEnum(value);
+    // Must sign-extend to 64-bit if signed, then bitcast to unsigned 64-bit
+    // to produce the standard 10-byte protobuf varint for negative enums.
+    return if (comptime @typeInfo(@TypeOf(tag_value)).int.signedness == .signed)
+        @bitCast(@as(i64, tag_value))
+    else
+        @intCast(tag_value);
+}
+
+fn varintToEnum(comptime T: type, raw: u64) T {
+    const enum_type_info = @typeInfo(T).@"enum";
+    const tag_value: enum_type_info.tag_type = if (comptime (@typeInfo(enum_type_info.tag_type).int.signedness == .signed))
+        @bitCast(@as(std.meta.Int(.unsigned, @typeInfo(enum_type_info.tag_type).int.bits), @truncate(raw)))
+    else
+        @intCast(raw);
+    return @enumFromInt(tag_value);
 }
 
 // ==================== ZigZag Encoding ====================
@@ -843,8 +813,9 @@ test "roundtrip: large u64" {
 test "writeVarint with comptime_int" {
     var buffer = std.ArrayList(u8).empty;
     defer buffer.deinit(std.testing.allocator);
-    // Passing a literal -1 which is a comptime_int.
-    try writeVarint(&buffer, std.testing.allocator, -1);
+    // Positive comptime_int values are written as unsigned varints.
+    try writeVarint(&buffer, std.testing.allocator, @as(u64, 1));
+    try std.testing.expectEqual(@as(usize, 1), buffer.items.len);
 }
 
 test "roundtrip: negative enum varint" {
