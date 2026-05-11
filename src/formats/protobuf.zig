@@ -114,6 +114,21 @@ fn serializeField(
                         try buffer.appendSlice(allocator, packed_buffer.items);
                     }
                 }
+            } else if (pointer_type_info.size == .one) {
+                const child_type_info = @typeInfo(pointer_type_info.child);
+                if (child_type_info == .array) {
+                    if (child_type_info.array.child == u8) {
+                        try writeTag(buffer, allocator, field_num, WIRE_LEN);
+                        try writeVarint(buffer, allocator, value.len);
+                        try buffer.appendSlice(allocator, value);
+                    } else {
+                        @compileError("unsupported pointer type: " ++ @typeName(T));
+                    }
+                } else {
+                    @compileError("unsupported pointer type: " ++ @typeName(T));
+                }
+            } else {
+                @compileError("unsupported pointer type: " ++ @typeName(T));
             }
         },
         .@"struct" => {
@@ -326,6 +341,28 @@ fn deserializeFieldValue(
                     try repeated_buffer.appendSlice(allocator, input[position.* .. position.* + length]);
                     position.* += length;
                 }
+            } else if (pointer_type_info.size == .one) {
+                const child_type_info = @typeInfo(pointer_type_info.child);
+                if (child_type_info == .array) {
+                    if (child_type_info.array.child == u8) {
+                        const length_value = readVarint(input, position) orelse return error.UnexpectedToken;
+                        const length: usize = @intCast(length_value);
+                        if (position.* + length > input.len) return error.UnexpectedToken;
+                        if (length != child_type_info.array.len) return error.UnexpectedToken;
+                        const source = input[position.* .. position.* + length];
+                        const ptr: *T = try allocator.create(pointer_type_info.child);
+                        @memcpy(ptr, source);
+                        @field(result, field_name) = ptr;
+                        position.* += length;
+                        seen.* = true;
+                    } else {
+                        @compileError("unsupported pointer type: " ++ @typeName(T));
+                    }
+                } else {
+                    @compileError("unsupported pointer type: " ++ @typeName(T));
+                }
+            } else {
+                @compileError("unsupported pointer type: " ++ @typeName(T));
             }
         },
         .@"struct" => {
@@ -476,7 +513,9 @@ fn writeVarint(
 ) !void {
     const T = @TypeOf(value);
     var remaining: u64 = undefined;
-    if (comptime (@typeInfo(T) == .int and @typeInfo(T).int.signedness == .signed) or @typeInfo(T) == .comptime_int) {
+    if (comptime @typeInfo(T) == .comptime_int) {
+        remaining = zigzagEncode(@as(i64, value));
+    } else if (comptime @typeInfo(T) == .int and @typeInfo(T).int.signedness == .signed) {
         remaining = zigzagEncode(value);
     } else {
         remaining = @intCast(value);
@@ -799,6 +838,13 @@ test "roundtrip: large u64" {
     defer result.deinit();
 
     try std.testing.expectEqual(original.val, result.value.val);
+}
+
+test "writeVarint with comptime_int" {
+    var buffer = std.ArrayList(u8).empty;
+    defer buffer.deinit(std.testing.allocator);
+    // Passing a literal -1 which is a comptime_int.
+    try writeVarint(&buffer, std.testing.allocator, -1);
 }
 
 test "roundtrip: negative enum varint" {

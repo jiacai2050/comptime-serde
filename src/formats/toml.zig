@@ -288,31 +288,22 @@ fn parseStructFull(
 
                 // If we hit a header, try to handle it.
                 if (trimmed[0] == '[') {
-                    if (trimmed.len > 2) {
-                        if (trimmed[1] == '[') {
-                            // Table Array Header: [[array_name]]
-                            if (mode == .array_element) {
-                                // We are inside an array element; a NEW [[array]] header
-                                // means this element is finished. Return to the loop in parseTableArray.
-                                return result;
-                            }
+                    if (trimmed.len > 2 and trimmed[1] == '[') {
+                        // Table Array Header: [[array_name]]
+                        if (mode == .array_element) {
+                            // We are inside an array element; a NEW [[array]] header
+                            // means this element is finished. Return to the loop in parseTableArray.
+                            return result;
+                        }
 
-                            const array_name = extractBracketedName(trimmed, 2, trimmed.len - 2);
-                            if (try dispatchTableArray(T, &result, &fields_seen, parser, array_name)) {
-                                // Successfully parsed the array, continue looking for more headers.
-                                continue;
-                            }
-                        } else {
-                            // Table Header: [table_name]
-                            const table_name = extractBracketedName(trimmed, 1, trimmed.len - 1);
-                            if (try dispatchTable(T, &result, &fields_seen, parser, table_name)) {
-                                // Successfully parsed the table, continue looking for more headers.
-                                continue;
-                            }
+                        const array_name = try parseHeaderName(trimmed, 2);
+                        if (try dispatchTableArray(T, &result, &fields_seen, parser, array_name)) {
+                            // Successfully parsed the array, continue looking for more headers.
+                            continue;
                         }
                     } else {
                         // Table Header: [table_name]
-                        const table_name = extractBracketedName(trimmed, 1, trimmed.len - 1);
+                        const table_name = try parseHeaderName(trimmed, 1);
                         if (try dispatchTable(T, &result, &fields_seen, parser, table_name)) {
                             // Successfully parsed the table, continue looking for more headers.
                             continue;
@@ -542,10 +533,25 @@ fn parseKvLineWithString(
     }
 }
 
-fn extractBracketedName(line: []const u8, start_index: usize, end_index: usize) []const u8 {
-    std.debug.assert(start_index < end_index);
-    std.debug.assert(end_index <= line.len);
-    return std.mem.trim(u8, line[start_index..end_index], " ");
+/// Safely extracts and validates the name from a header like [name] or [[name]].
+fn parseHeaderName(line: []const u8, bracket_count: usize) ![]const u8 {
+    // Minimum length check: brackets + at least one character name.
+    // e.g., "[a]" (3) or "[[a]]" (5)
+    if (line.len < (bracket_count * 2) + 1) return error.UnexpectedToken;
+
+    // Check opening brackets.
+    var index: usize = 0;
+    while (index < bracket_count) : (index += 1) {
+        if (line[index] != '[') return error.UnexpectedToken;
+    }
+
+    // Check closing brackets.
+    index = 0;
+    while (index < bracket_count) : (index += 1) {
+        if (line[line.len - 1 - index] != ']') return error.UnexpectedToken;
+    }
+
+    return std.mem.trim(u8, line[bracket_count .. line.len - bracket_count], " ");
 }
 
 fn dispatchTable(
@@ -645,16 +651,13 @@ fn parseTableArray(
         // Check if the next header is another element of this same array.
         if (parser.line_ptr) |next_line| {
             const next_trimmed = std.mem.trim(u8, next_line, " \r");
-            if (next_trimmed.len > 3) {
-                if (next_trimmed[0] == '[') {
-                    if (next_trimmed[1] == '[') {
-                        const next_name = extractBracketedName(next_trimmed, 2, next_trimmed.len - 2);
-                        if (std.mem.eql(u8, next_name, array_name)) {
-                            parser.next();
-                            continue;
-                        }
+            if (next_trimmed.len > 0 and next_trimmed[0] == '[') {
+                if (parseHeaderName(next_trimmed, 2)) |next_name| {
+                    if (std.mem.eql(u8, next_name, array_name)) {
+                        parser.next();
+                        continue;
                     }
-                }
+                } else |_| {}
             }
         }
         break;

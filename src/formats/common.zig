@@ -109,14 +109,9 @@ pub fn effectiveDeserializeOptions(options: FormatFieldOptions) EffectiveDeseria
 /// Returns the `SerdeFieldOptions` for `field_name` on `T`, parsed from `T.serde_fields`.
 pub fn fieldOptions(comptime T: type, comptime field_name: []const u8) SerdeFieldOptions {
     const type_info = @typeInfo(T);
-    if (type_info != .@"struct") {
-        if (type_info != .@"union") {
-            if (type_info != .@"enum") {
-                if (type_info != .@"opaque") {
-                    return .{};
-                }
-            }
-        }
+    switch (type_info) {
+        .@"struct", .@"union", .@"enum", .@"opaque" => {},
+        else => return .{},
     }
     if (!@hasDecl(T, "serde_fields")) return .{};
     const serde_fields = @field(T, "serde_fields");
@@ -217,14 +212,9 @@ fn parseProtobufFieldOptions(comptime T: type, comptime field_name: []const u8, 
 /// Validates that every key in `T.serde_fields` corresponds to an actual field on `T`.
 pub fn validateSerdeFieldNames(comptime T: type) void {
     const t_type_info = @typeInfo(T);
-    if (t_type_info != .@"struct") {
-        if (t_type_info != .@"union") {
-            if (t_type_info != .@"enum") {
-                if (t_type_info != .@"opaque") {
-                    return;
-                }
-            }
-        }
+    switch (t_type_info) {
+        .@"struct", .@"union", .@"enum", .@"opaque" => {},
+        else => return,
     }
     if (!@hasDecl(T, "serde_fields")) return;
     const serde_fields = @field(T, "serde_fields");

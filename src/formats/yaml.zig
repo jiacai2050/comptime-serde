@@ -202,7 +202,7 @@ fn writeStringValue(writer: *std.Io.Writer, string: []const u8, indent: usize) !
         // the string does NOT end with '\n'. When it does end with '\n',
         // the split produces an extra "" that we must still write as an
         // empty indented line to preserve the trailing newline content.
-        const has_trailing_newline = string[string.len - 1] == '\n';
+        const has_trailing_newline = if (string.len > 0) string[string.len - 1] == '\n' else false;
         while (lines.next()) |line| {
             if (!has_trailing_newline) {
                 if (line.len == 0) {
