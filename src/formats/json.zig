@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const common = @import("common.zig");
 const Parsed = common.Parsed;
 
@@ -8,26 +9,32 @@ pub fn Serde(comptime T: type) type {
         /// Writes `value` as JSON to `writer`.
         pub fn serialize(writer: *std.Io.Writer, value: T) !void {
             comptime common.validateFieldConfigs(.json, T);
-            const info = @typeInfo(T);
-            switch (info) {
+            const type_info = @typeInfo(T);
+            switch (type_info) {
                 .bool => try writer.writeAll(if (value) "true" else "false"),
                 .int => try writer.print("{}", .{value}),
                 .float => try writer.print("{}", .{value}),
-                .pointer => |pointer_info| {
-                    if (pointer_info.size == .slice and pointer_info.child == u8) {
-                        try common.writeEscapedString(writer, value);
-                    } else if (pointer_info.size == .slice) {
-                        try writer.writeByte('[');
-                        const ItemSerializer = Serde(pointer_info.child);
-                        for (value, 0..) |item, index| {
-                            if (index > 0) try writer.writeByte(',');
-                            try ItemSerializer.serialize(writer, item);
+                .pointer => |pointer_type_info| {
+                    if (pointer_type_info.size == .slice) {
+                        if (pointer_type_info.child == u8) {
+                            try common.writeEscapedString(writer, value);
+                        } else {
+                            try writer.writeByte('[');
+                            const ItemSerializer = Serde(pointer_type_info.child);
+                            for (value, 0..) |item, index| {
+                                if (index > 0) try writer.writeByte(',');
+                                try ItemSerializer.serialize(writer, item);
+                            }
+                            try writer.writeByte(']');
                         }
-                        try writer.writeByte(']');
-                    } else if (pointer_info.size == .one) {
-                        const child = @typeInfo(pointer_info.child);
-                        if (child == .array and child.array.child == u8) {
-                            try common.writeEscapedString(writer, @as([]const u8, value));
+                    } else if (pointer_type_info.size == .one) {
+                        const child_type_info = @typeInfo(pointer_type_info.child);
+                        if (child_type_info == .array) {
+                            if (child_type_info.array.child == u8) {
+                                try common.writeEscapedString(writer, @as([]const u8, value));
+                            } else {
+                                @compileError("unsupported pointer type: " ++ @typeName(T));
+                            }
                         } else {
                             @compileError("unsupported pointer type: " ++ @typeName(T));
                         }
@@ -35,11 +42,11 @@ pub fn Serde(comptime T: type) type {
                         @compileError("unsupported pointer type: " ++ @typeName(T));
                     }
                 },
-                .array => |array_info| {
-                    if (array_info.child == u8) {
+                .array => |array_type_info| {
+                    if (array_type_info.child == u8) {
                         try common.writeEscapedString(writer, &value);
                     } else {
-                        const ItemSerializer = Serde(array_info.child);
+                        const ItemSerializer = Serde(array_type_info.child);
                         try writer.writeByte('[');
                         inline for (value, 0..) |item, index| {
                             if (index > 0) try writer.writeByte(',');
@@ -56,10 +63,10 @@ pub fn Serde(comptime T: type) type {
                         try writer.writeAll("null");
                     }
                 },
-                .@"struct" => |struct_info| {
+                .@"struct" => |struct_type_info| {
                     try writer.writeByte('{');
                     var first = true;
-                    inline for (struct_info.fields) |field| {
+                    inline for (struct_type_info.fields) |field| {
                         const field_value = @field(value, field.name);
                         if (common.shouldIncludeField(.json, T, field.name, field_value)) {
                             if (!first) try writer.writeByte(',');
@@ -94,8 +101,8 @@ pub fn Serde(comptime T: type) type {
         }
 
         fn parseValue(scanner: *std.json.Scanner, allocator: std.mem.Allocator) !T {
-            const info = @typeInfo(T);
-            switch (info) {
+            const type_info = @typeInfo(T);
+            switch (type_info) {
                 .bool => {
                     return switch (try scanner.next()) {
                         .true => true,
@@ -105,84 +112,86 @@ pub fn Serde(comptime T: type) type {
                 },
                 .int => {
                     return switch (try scanner.next()) {
-                        .number => |num_str| std.fmt.parseInt(T, num_str, 10),
+                        .number => |number_string| std.fmt.parseInt(T, number_string, 10),
                         else => error.UnexpectedToken,
                     };
                 },
                 .float => {
                     return switch (try scanner.next()) {
-                        .number => |num_str| std.fmt.parseFloat(T, num_str),
+                        .number => |number_string| std.fmt.parseFloat(T, number_string),
                         else => error.UnexpectedToken,
                     };
                 },
-                .pointer => |pointer_info| {
-                    if (pointer_info.size == .slice and pointer_info.child == u8) {
-                        return switch (try scanner.nextAlloc(allocator, .alloc_always)) {
-                            .string => |str| str,
-                            .allocated_string => |str| str,
-                            else => error.UnexpectedToken,
-                        };
-                    } else if (pointer_info.size == .slice) {
-                        if (try scanner.next() != .array_begin) return error.UnexpectedToken;
-                        var list = std.ArrayList(pointer_info.child).empty;
-                        errdefer list.deinit(allocator);
-                        while (true) {
-                            if ((try scanner.peekNextTokenType()) == .array_end) {
-                                _ = try scanner.next();
-                                break;
+                .pointer => |pointer_type_info| {
+                    if (pointer_type_info.size == .slice) {
+                        if (pointer_type_info.child == u8) {
+                            return switch (try scanner.nextAlloc(allocator, .alloc_always)) {
+                                .string => |string| string,
+                                .allocated_string => |string| string,
+                                else => error.UnexpectedToken,
+                            };
+                        } else {
+                            if (try scanner.next() != .array_begin) return error.UnexpectedToken;
+                            var list = std.ArrayList(pointer_type_info.child).empty;
+                            errdefer list.deinit(allocator);
+                            while (true) {
+                                if ((try scanner.peekNextTokenType()) == .array_end) {
+                                    _ = try scanner.next();
+                                    break;
+                                }
+                                const ItemParser = Serde(pointer_type_info.child);
+                                const item = try ItemParser.parseValue(scanner, allocator);
+                                try list.append(allocator, item);
                             }
-                            const ItemParser = Serde(pointer_info.child);
-                            const item = try ItemParser.parseValue(scanner, allocator);
-                            try list.append(allocator, item);
+                            return try list.toOwnedSlice(allocator);
                         }
-                        return try list.toOwnedSlice(allocator);
                     } else {
                         @compileError("unsupported pointer type: " ++ @typeName(T));
                     }
                 },
-                .array => |array_info| {
-                    if (array_info.child == u8) {
-                        const src = switch (try scanner.nextAlloc(allocator, .alloc_always)) {
-                            .string => |str| str,
-                            .allocated_string => |str| str,
+                .array => |array_type_info| {
+                    if (array_type_info.child == u8) {
+                        const source = switch (try scanner.nextAlloc(allocator, .alloc_always)) {
+                            .string => |string| string,
+                            .allocated_string => |string| string,
                             else => return error.UnexpectedToken,
                         };
                         var result: T = undefined;
-                        const len = @min(src.len, array_info.len);
-                        @memcpy(result[0..len], src[0..len]);
-                        @memset(result[len..], 0);
+                        const length = @min(source.len, array_type_info.len);
+                        @memcpy(result[0..length], source[0..length]);
+                        @memset(result[length..], 0);
                         return result;
                     } else {
                         if (try scanner.next() != .array_begin) return error.UnexpectedToken;
                         var result: T = undefined;
-                        inline for (0..array_info.len) |index| {
-                            const ItemParser = Serde(array_info.child);
+                        inline for (0..array_type_info.len) |index| {
+                            const ItemParser = Serde(array_type_info.child);
                             result[index] = try ItemParser.parseValue(scanner, allocator);
                         }
                         if (try scanner.next() != .array_end) return error.UnexpectedToken;
                         return result;
                     }
                 },
-                .optional => |optional_info| {
+                .optional => |optional_type_info| {
                     if ((try scanner.peekNextTokenType()) == .null) {
                         _ = try scanner.next();
                         return null;
                     }
-                    const OptionalParser = Serde(optional_info.child);
+                    const OptionalParser = Serde(optional_type_info.child);
                     return try OptionalParser.parseValue(scanner, allocator);
                 },
-                .@"struct" => |struct_info| {
+                .@"struct" => |struct_type_info| {
                     if (try scanner.next() != .object_begin) return error.UnexpectedToken;
                     var result: T = undefined;
-                    var fields_seen = [_]bool{false} ** struct_info.fields.len;
+                    var fields_seen = [_]bool{false} ** struct_type_info.fields.len;
                     while (true) {
                         const key = switch (try scanner.nextAlloc(allocator, .alloc_if_needed)) {
-                            .string => |str| str,
-                            .allocated_string => |str| str,
+                            .string => |string| string,
+                            .allocated_string => |string| string,
                             .object_end => break,
                             else => return error.UnexpectedToken,
                         };
-                        inline for (struct_info.fields, 0..) |field, index| {
+                        inline for (struct_type_info.fields, 0..) |field, index| {
                             if (common.matchesInputKey(.json, T, field.name, key)) {
                                 const config = common.deserializeConfig(.json, T, field.name);
                                 if (config.skip) {
@@ -200,17 +209,17 @@ pub fn Serde(comptime T: type) type {
                             try scanner.skipValue();
                         }
                     }
-                    try common.fillMissingFields(.json, T, &result, &fields_seen);
+                    try common.fillMissingFields(T, &result, &fields_seen);
                     return result;
                 },
-                .@"enum" => |enum_info| {
-                    const str = switch (try scanner.nextAlloc(allocator, .alloc_if_needed)) {
-                        .string => |s| s,
-                        .allocated_string => |s| s,
+                .@"enum" => |enum_type_info| {
+                    const string = switch (try scanner.nextAlloc(allocator, .alloc_if_needed)) {
+                        .string => |enum_string| enum_string,
+                        .allocated_string => |enum_string| enum_string,
                         else => return error.UnexpectedToken,
                     };
-                    inline for (enum_info.fields) |field| {
-                        if (std.mem.eql(u8, field.name, str)) {
+                    inline for (enum_type_info.fields) |field| {
+                        if (std.mem.eql(u8, field.name, string)) {
                             return @enumFromInt(field.value);
                         }
                     }
@@ -224,56 +233,56 @@ pub fn Serde(comptime T: type) type {
 
 test "serialize bool" {
     const serde = Serde(bool);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, true);
     try std.testing.expectEqualStrings("true", writer.buffered());
 }
 
 test "serialize int" {
     const serde = Serde(u32);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, 42);
     try std.testing.expectEqualStrings("42", writer.buffered());
 }
 
 test "serialize float" {
     const serde = Serde(f64);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, 3.14);
     try std.testing.expect(std.mem.startsWith(u8, writer.buffered(), "3.14"));
 }
 
 test "serialize string" {
     const serde = Serde([]const u8);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, "hello");
     try std.testing.expectEqualStrings("\"hello\"", writer.buffered());
 }
 
 test "serialize string with escapes" {
     const serde = Serde([]const u8);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, "line1\nline2");
     try std.testing.expectEqualStrings("\"line1\\nline2\"", writer.buffered());
 }
 
 test "serialize optional present" {
     const serde = Serde(?u32);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, 42);
     try std.testing.expectEqualStrings("42", writer.buffered());
 }
 
 test "serialize optional null" {
     const serde = Serde(?u32);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, null);
     try std.testing.expectEqualStrings("null", writer.buffered());
 }
@@ -285,8 +294,8 @@ test "serialize struct" {
         active: bool,
     };
     const serde = Serde(User);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, User{ .name = "alice", .age = 30, .active = true });
     try std.testing.expectEqualStrings(
         \\{"name":"alice","age":30,"active":true}
@@ -297,8 +306,8 @@ test "serialize nested struct" {
     const Address = struct { city: []const u8, zip: u32 };
     const User = struct { name: []const u8, address: Address };
     const serde = Serde(User);
-    var buf: [512]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, User{
         .name = "bob",
         .address = .{ .city = "Beijing", .zip = 100000 },
@@ -311,8 +320,8 @@ test "serialize nested struct" {
 test "serialize string slice array" {
     const Team = struct { members: []const []const u8 };
     const serde = Serde(Team);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, Team{ .members = &.{ "alice", "bob" } });
     try std.testing.expectEqualStrings(
         \\{"members":["alice","bob"]}
@@ -322,8 +331,8 @@ test "serialize string slice array" {
 test "serialize numeric array" {
     const Data = struct { scores: []const u32 };
     const serde = Serde(Data);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, Data{ .scores = &.{ 100, 90, 80 } });
     try std.testing.expectEqualStrings(
         \\{"scores":[100,90,80]}
@@ -423,8 +432,8 @@ test "roundtrip: basic struct" {
     const serde = Serde(User);
     const original = User{ .name = "alice", .age = 30, .active = true };
 
-    var buf: [512]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, original);
 
     var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
@@ -448,8 +457,8 @@ test "roundtrip: nested struct with optional and array" {
         .tags = &.{ "web", "api" },
     };
 
-    var buf: [512]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, original);
 
     var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
@@ -462,7 +471,7 @@ test "roundtrip: nested struct with optional and array" {
     try std.testing.expectEqualStrings("api", restored.value.tags[1]);
 }
 
-// ==================== Error Case Tests ====================
+// Error case tests.
 
 test "error: missing required field" {
     const User = struct { name: []const u8, age: u32 };
@@ -549,8 +558,8 @@ test "roundtrip: fixed-size u8 array" {
     @memcpy(original.name[0..2], "hi");
     @memset(original.name[2..], 0);
 
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, original);
 
     var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
@@ -563,8 +572,8 @@ test "serialize enum" {
     const Status = enum { active, inactive };
     const Data = struct { status: Status };
     const serde = Serde(Data);
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, Data{ .status = .active });
     try std.testing.expectEqualStrings(
         \\{"status":"active"}
@@ -588,8 +597,8 @@ test "roundtrip: enum" {
     const serde = Serde(Data);
     const original = Data{ .color = .green };
 
-    var buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, original);
 
     var restored = try serde.deserialize(std.testing.allocator, writer.buffered());
