@@ -2,6 +2,29 @@ const std = @import("std");
 const common = @import("common.zig");
 const Parsed = common.Parsed;
 
+/// Internal state for the TOML parser.
+const Parser = struct {
+    allocator: std.mem.Allocator,
+    /// The source input split into lines.
+    line_iterator: std.mem.SplitIterator(u8, .scalar),
+    /// The current line being peeked/examined.
+    line_ptr: ?[]const u8,
+
+    fn next(self: *Parser) void {
+        self.line_ptr = self.line_iterator.next();
+    }
+};
+
+/// Defines the current context of the recursive descent parser.
+const Mode = enum {
+    /// The top-level of the TOML document.
+    root,
+    /// A nested [table].
+    nested,
+    /// An element within a [[table_array]].
+    array_element,
+};
+
 /// Returns a comptime-generated TOML serializer/deserializer for type `T`.
 pub fn Serde(comptime T: type) type {
     return struct {
@@ -11,18 +34,23 @@ pub fn Serde(comptime T: type) type {
             try writeTable(writer, value);
         }
 
-        /// Parses `input` as TOML into a `Parsed(T)` that owns all allocated memory.
+        /// Parses `source` as TOML into a `Parsed(T)` that owns all allocated memory.
         /// Caller must call `deinit()`.
-        pub fn deserialize(allocator: std.mem.Allocator, input: []const u8) !Parsed(T) {
+        pub fn deserialize(allocator: std.mem.Allocator, source: []const u8) !Parsed(T) {
             comptime common.validateFieldConfigs(.toml, T);
             var arena = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
 
             const arena_allocator = arena.allocator();
-            var lines = std.mem.splitScalar(u8, input, '\n');
-            var line_ptr: ?[]const u8 = lines.next();
+            var parser = Parser{
+                .allocator = arena_allocator,
+                .line_iterator = std.mem.splitScalar(u8, source, '\n'),
+                .line_ptr = null,
+            };
+            // Prime the first line.
+            parser.next();
 
-            const value = try parseStructFull(T, arena_allocator, &lines, &line_ptr, false);
+            const value = try parseStructFull(T, &parser, .root);
 
             return .{ .arena = arena, .value = value };
         }
@@ -34,8 +62,8 @@ pub fn Serde(comptime T: type) type {
 /// Writes a struct as TOML: key-value pairs first, then nested table sections.
 fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
     const T = @TypeOf(value);
-    const info = @typeInfo(T);
-    switch (info) {
+    const type_info = @typeInfo(T);
+    switch (type_info) {
         .@"struct" => |struct_info| {
             // Pass 1: write key-value pairs (primitives, strings, inline arrays).
             inline for (struct_info.fields) |field| {
@@ -44,24 +72,26 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
                 if (common.shouldIncludeField(.toml, T, field.name, field_value)) {
                     const field_type_info = @typeInfo(field.type);
                     switch (field_type_info) {
-                        .@"struct" => {}, // handled in pass 2
-                        .optional => |optional_info| {
+                        .@"struct" => {}, // Handled in pass 2.
+                        .optional => |optional_type_info| {
                             // Optional struct: handled in pass 2; optional primitives: write inline.
-                            if (@typeInfo(optional_info.child) == .@"struct") {
-                                // handled in pass 2
+                            if (@typeInfo(optional_type_info.child) == .@"struct") {
+                                // Handled in pass 2.
                             } else {
                                 try writeKeyValue(writer, field_key, field_value);
                             }
                         },
-                        .pointer => |pointer_info| {
-                            if (pointer_info.size == .slice and pointer_info.child == u8) {
-                                // String slice → inline KV.
-                                try writeKeyValue(writer, field_key, field_value);
-                            } else if (pointer_info.size == .slice) {
-                                // Non-string slice: inline if primitives, table array if structs.
-                                const child_info = @typeInfo(pointer_info.child);
-                                if (child_info != .@"struct") {
+                        .pointer => |pointer_type_info| {
+                            if (pointer_type_info.size == .slice) {
+                                if (pointer_type_info.child == u8) {
+                                    // String slice → inline KV.
                                     try writeKeyValue(writer, field_key, field_value);
+                                } else {
+                                    // Non-string slice: inline if primitives, table array if structs.
+                                    const child_type_info = @typeInfo(pointer_type_info.child);
+                                    if (child_type_info != .@"struct") {
+                                        try writeKeyValue(writer, field_key, field_value);
+                                    }
                                 }
                             }
                         },
@@ -82,29 +112,31 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
                             try writer.print("[{s}]\n", .{field_key});
                             try writeTable(writer, field_value);
                         },
-                        .optional => |optional_info| {
-                            if (@typeInfo(optional_info.child) == .@"struct") {
+                        .optional => |optional_type_info| {
+                            if (@typeInfo(optional_type_info.child) == .@"struct") {
                                 if (field_value) |present| {
                                     try writer.print("[{s}]\n", .{field_key});
                                     try writeTable(writer, present);
                                 }
                             }
                         },
-                        .pointer => |pointer_info| {
-                            if (pointer_info.size == .slice and pointer_info.child != u8) {
-                                const child_info = @typeInfo(pointer_info.child);
-                                if (child_info == .@"struct") {
-                                    for (field_value) |item| {
-                                        try writer.print("[[{s}]]\n", .{field_key});
-                                        try writeTable(writer, item);
+                        .pointer => |pointer_type_info| {
+                            if (pointer_type_info.size == .slice) {
+                                if (pointer_type_info.child != u8) {
+                                    const child_type_info = @typeInfo(pointer_type_info.child);
+                                    if (child_type_info == .@"struct") {
+                                        for (field_value) |item| {
+                                            try writer.print("[[{s}]]\n", .{field_key});
+                                            try writeTable(writer, item);
+                                        }
                                     }
                                 }
                             }
                         },
                         .array => |array_info| {
                             if (array_info.child != u8) {
-                                const child_info = @typeInfo(array_info.child);
-                                if (child_info == .@"struct") {
+                                const child_type_info = @typeInfo(array_info.child);
+                                if (child_type_info == .@"struct") {
                                     for (field_value) |item| {
                                         try writer.print("[[{s}]]\n", .{field_key});
                                         try writeTable(writer, item);
@@ -122,6 +154,8 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
 }
 
 fn writeKeyValue(writer: *std.Io.Writer, key: []const u8, value: anytype) !void {
+    std.debug.assert(key.len > 0);
+
     try writer.print("{s} = ", .{key});
     try writeValue(writer, value);
     try writer.writeByte('\n');
@@ -129,22 +163,24 @@ fn writeKeyValue(writer: *std.Io.Writer, key: []const u8, value: anytype) !void 
 
 fn writeValue(writer: *std.Io.Writer, value: anytype) !void {
     const T = @TypeOf(value);
-    const info = @typeInfo(T);
-    switch (info) {
+    const type_info = @typeInfo(T);
+    switch (type_info) {
         .bool => try writer.writeAll(if (value) "true" else "false"),
         .int => try writer.print("{d}", .{value}),
         .float => try writer.print("{d}", .{value}),
-        .pointer => |pointer_info| {
-            if (pointer_info.size == .slice and pointer_info.child == u8) {
-                try writeString(writer, value);
-            } else if (pointer_info.size == .slice) {
-                try writeInlineArray(writer, value);
+        .pointer => |pointer_type_info| {
+            if (pointer_type_info.size == .slice) {
+                if (pointer_type_info.child == u8) {
+                    try writeString(writer, value);
+                } else {
+                    try writeInlineArray(writer, value);
+                }
             } else {
                 @compileError("unsupported pointer type: " ++ @typeName(T));
             }
         },
-        .array => |array_info| {
-            if (array_info.child == u8) {
+        .array => |array_type_info| {
+            if (array_type_info.child == u8) {
                 try writeString(writer, &value);
             } else {
                 try writeInlineArray(writer, &value);
@@ -187,8 +223,12 @@ fn writeString(writer: *std.Io.Writer, string: []const u8) !void {
                 },
                 else => {
                     consecutive_quotes = 0;
-                    if (char < 0x20 and char != '\n') {
-                        try writer.print("\\u{x:0>4}", .{char});
+                    if (char < 0x20) {
+                        if (char != '\n') {
+                            try writer.print("\\u{x:0>4}", .{char});
+                        } else {
+                            try writer.writeByte(char);
+                        }
                     } else {
                         try writer.writeByte(char);
                     }
@@ -213,71 +253,89 @@ fn writeInlineArray(writer: *std.Io.Writer, slice: anytype) !void {
 // ==================== Deserialization ====================
 
 /// Parses a full struct including KV lines, [table] headers, and [[array]] headers.
-/// When `in_array` is true, stops at [[array]] headers without dispatching them
-/// (the caller handles subsequent elements).
+///
+/// This function implements a "header bubbling" mechanism to prevent infinite loops:
+/// 1. If a header ([name] or [[name]]) matches a field in T, it is consumed and parsed.
+/// 2. If it does NOT match and we are in a nested context (.nested or .array_element),
+///    we return immediately WITHOUT consuming the header, allowing the caller (parent)
+///     to try matching it.
+/// 3. If it does NOT match and we are at the .root, we consume and skip it.
 fn parseStructFull(
     comptime T: type,
-    allocator: std.mem.Allocator,
-    lines: *std.mem.SplitIterator(u8, .scalar),
-    line_ptr: *?[]const u8,
-    in_array: bool,
+    parser: *Parser,
+    mode: Mode,
 ) !T {
-    const info = @typeInfo(T);
-    switch (info) {
+    const type_info = @typeInfo(T);
+    switch (type_info) {
         .@"struct" => |struct_info| {
             var result: T = undefined;
             var fields_seen = [_]bool{false} ** struct_info.fields.len;
 
-            // Phase 1: parse key-value lines.
-            try parseKvLines(T, &result, &fields_seen, allocator, lines, line_ptr);
+            // Phase 1: parse key-value lines at the current level.
+            try parseKvLines(T, &result, &fields_seen, parser);
 
             // Phase 2: dispatch [table] and [[array]] headers.
-            while (line_ptr.*) |raw_line| {
+            while (parser.line_ptr) |raw_line| {
                 const trimmed = std.mem.trim(u8, raw_line, " \r");
-                if (trimmed.len == 0 or trimmed[0] == '#') {
-                    line_ptr.* = lines.next();
+                if (trimmed.len == 0) {
+                    parser.next();
+                    continue;
+                }
+                if (trimmed[0] == '#') {
+                    parser.next();
                     continue;
                 }
 
+                // If we hit a header, try to handle it.
                 if (trimmed[0] == '[') {
-                    if (trimmed.len > 2 and trimmed[1] == '[') {
-                        if (in_array) {
-                            // Inside a table array element: [[array]] belongs to the caller.
-                            return result;
+                    if (trimmed.len > 2) {
+                        if (trimmed[1] == '[') {
+                            // Table Array Header: [[array_name]]
+                            if (mode == .array_element) {
+                                // We are inside an array element; a NEW [[array]] header
+                                // means this element is finished. Return to the loop in parseTableArray.
+                                return result;
+                            }
+
+                            const array_name = extractBracketedName(trimmed, 2, trimmed.len - 2);
+                            if (try dispatchTableArray(T, &result, &fields_seen, parser, array_name)) {
+                                // Successfully parsed the array, continue looking for more headers.
+                                continue;
+                            }
+                        } else {
+                            // Table Header: [table_name]
+                            const table_name = extractBracketedName(trimmed, 1, trimmed.len - 1);
+                            if (try dispatchTable(T, &result, &fields_seen, parser, table_name)) {
+                                // Successfully parsed the table, continue looking for more headers.
+                                continue;
+                            }
                         }
-                        // Top level: dispatch [[array]].
-                        const array_name = extractBracketedName(trimmed, 2, trimmed.len - 2);
-                        line_ptr.* = lines.next();
-                        try dispatchTableArray(
-                            T,
-                            &result,
-                            &fields_seen,
-                            allocator,
-                            lines,
-                            line_ptr,
-                            array_name,
-                        );
                     } else {
+                        // Table Header: [table_name]
                         const table_name = extractBracketedName(trimmed, 1, trimmed.len - 1);
-                        line_ptr.* = lines.next();
-                        try dispatchTable(
-                            T,
-                            &result,
-                            &fields_seen,
-                            allocator,
-                            lines,
-                            line_ptr,
-                            table_name,
-                        );
+                        if (try dispatchTable(T, &result, &fields_seen, parser, table_name)) {
+                            // Successfully parsed the table, continue looking for more headers.
+                            continue;
+                        }
                     }
-                    continue;
+
+                    // No field in T matched this header.
+                    if (mode == .root) {
+                        // At root: skip unknown sections to be robust.
+                        parser.next();
+                        skipSection(parser);
+                        continue;
+                    } else {
+                        // In nested context: return to parent to let them try matching it.
+                        return result;
+                    }
                 }
 
-                // Unknown line format — skip.
-                line_ptr.* = lines.next();
+                // Unexpected line format in section dispatch phase.
+                parser.next();
             }
 
-            try common.fillMissingFields(.toml, T, &result, &fields_seen);
+            try common.fillMissingFields(T, &result, &fields_seen);
             return result;
         },
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -289,22 +347,26 @@ fn parseKvLines(
     comptime T: type,
     result: *T,
     fields_seen: *[std.meta.fields(T).len]bool,
-    allocator: std.mem.Allocator,
-    lines: *std.mem.SplitIterator(u8, .scalar),
-    line_ptr: *?[]const u8,
+    parser: *Parser,
 ) !void {
-    while (line_ptr.*) |raw_line| {
+    while (parser.line_ptr) |raw_line| {
         const trimmed = std.mem.trim(u8, raw_line, " \r");
-        if (trimmed.len == 0 or trimmed[0] == '#') {
-            line_ptr.* = lines.next();
+        if (trimmed.len == 0) {
+            parser.next();
             continue;
         }
+        if (trimmed[0] == '#') {
+            parser.next();
+            continue;
+        }
+
+        // Section headers terminate the KV parsing phase.
         if (trimmed[0] == '[') {
             return;
         }
 
         const eq_index = std.mem.indexOfScalar(u8, trimmed, '=') orelse {
-            line_ptr.* = lines.next();
+            parser.next();
             continue;
         };
         const key = std.mem.trim(u8, trimmed[0..eq_index], " ");
@@ -313,52 +375,52 @@ fn parseKvLines(
         if (std.mem.startsWith(u8, raw_value, "\"\"\"")) {
             const multi_line_value = try collectMultiLineString(
                 raw_value,
-                lines,
-                line_ptr,
-                allocator,
+                parser,
             );
             try parseKvLineWithString(T, result, fields_seen, key, multi_line_value);
         } else {
-            try parseKvLine(T, result, fields_seen, allocator, key, raw_value);
-            line_ptr.* = lines.next();
+            try parseKvLine(T, result, fields_seen, parser.allocator, key, raw_value);
+            parser.next();
         }
     }
 }
 
 fn collectMultiLineString(
     raw_value: []const u8,
-    lines: *std.mem.SplitIterator(u8, .scalar),
-    line_ptr: *?[]const u8,
-    allocator: std.mem.Allocator,
+    parser: *Parser,
 ) ![]const u8 {
     var result = std.ArrayList(u8).empty;
-    defer result.deinit(allocator);
+    defer result.deinit(parser.allocator);
 
     // Content after opening """: per TOML spec, a newline immediately after """ is trimmed.
     const after_open = raw_value[3..];
     if (after_open.len > 0) {
         // Check if closing """ is on the same line.
-        if (std.mem.indexOf(u8, after_open, "\"\"\"")) |close_pos| {
-            try appendUnescaped(&result, allocator, after_open[0..close_pos]);
-            line_ptr.* = lines.next();
-            return try result.toOwnedSlice(allocator);
+        if (std.mem.indexOf(u8, after_open, "\"\"\"")) |close_position| {
+            try appendUnescaped(&result, parser.allocator, after_open[0..close_position]);
+            parser.next();
+            return try result.toOwnedSlice(parser.allocator);
         }
         // Non-empty content on opening line (after trimming leading newline per spec, we skip it).
     }
 
     // Read subsequent lines until closing """.
-    while (lines.next()) |next_line| {
+    while (parser.line_iterator.next()) |next_line| {
         const line = stripTrailingCr(next_line);
-        if (std.mem.indexOf(u8, line, "\"\"\"")) |close_pos| {
-            if (result.items.len > 0) try result.append(allocator, '\n');
-            try appendUnescaped(&result, allocator, line[0..close_pos]);
-            line_ptr.* = lines.next();
-            return try result.toOwnedSlice(allocator);
+        if (std.mem.indexOf(u8, line, "\"\"\"")) |close_position| {
+            if (result.items.len > 0) {
+                try result.append(parser.allocator, '\n');
+            }
+            try appendUnescaped(&result, parser.allocator, line[0..close_position]);
+            parser.next();
+            return try result.toOwnedSlice(parser.allocator);
         }
-        if (result.items.len > 0) try result.append(allocator, '\n');
-        try appendUnescaped(&result, allocator, line);
+        if (result.items.len > 0) {
+            try result.append(parser.allocator, '\n');
+        }
+        try appendUnescaped(&result, parser.allocator, line);
     }
-    line_ptr.* = null;
+    parser.line_ptr = null;
     return error.UnexpectedToken;
 }
 
@@ -367,69 +429,76 @@ fn appendUnescaped(
     allocator: std.mem.Allocator,
     input: []const u8,
 ) !void {
-    var i: usize = 0;
-    while (i < input.len) {
-        if (input[i] == '\\' and i + 1 < input.len) {
-            switch (input[i + 1]) {
-                '\\' => {
-                    try result.append(allocator, '\\');
-                    i += 2;
-                },
-                'n' => {
-                    try result.append(allocator, '\n');
-                    i += 2;
-                },
-                'r' => {
-                    try result.append(allocator, '\r');
-                    i += 2;
-                },
-                't' => {
-                    try result.append(allocator, '\t');
-                    i += 2;
-                },
-                '"' => {
-                    try result.append(allocator, '"');
-                    i += 2;
-                },
-                'u' => {
-                    if (i + 5 < input.len) {
-                        const code = std.fmt.parseInt(u21, input[i + 2 .. i + 6], 16) catch {
-                            try result.append(allocator, input[i]);
-                            i += 1;
-                            continue;
-                        };
-                        if (code < 0x80) {
-                            try result.append(allocator, @intCast(code));
-                        } else {
-                            var buf: [4]u8 = undefined;
-                            const utf8_len = std.unicode.utf8Encode(code, &buf) catch {
-                                try result.append(allocator, input[i]);
-                                i += 1;
+    var index: usize = 0;
+    while (index < input.len) {
+        if (input[index] == '\\') {
+            if (index + 1 < input.len) {
+                switch (input[index + 1]) {
+                    '\\' => {
+                        try result.append(allocator, '\\');
+                        index += 2;
+                    },
+                    'n' => {
+                        try result.append(allocator, '\n');
+                        index += 2;
+                    },
+                    'r' => {
+                        try result.append(allocator, '\r');
+                        index += 2;
+                    },
+                    't' => {
+                        try result.append(allocator, '\t');
+                        index += 2;
+                    },
+                    '"' => {
+                        try result.append(allocator, '"');
+                        index += 2;
+                    },
+                    'u' => {
+                        if (index + 5 < input.len) {
+                            const code = std.fmt.parseInt(u21, input[index + 2 .. index + 6], 16) catch {
+                                try result.append(allocator, input[index]);
+                                index += 1;
                                 continue;
                             };
-                            try result.appendSlice(allocator, buf[0..utf8_len]);
+                            if (code < 0x80) {
+                                try result.append(allocator, @intCast(code));
+                            } else {
+                                var buffer: [4]u8 = undefined;
+                                const utf8_length = std.unicode.utf8Encode(code, &buffer) catch {
+                                    try result.append(allocator, input[index]);
+                                    index += 1;
+                                    continue;
+                                };
+                                try result.appendSlice(allocator, buffer[0..utf8_length]);
+                            }
+                            index += 6;
+                        } else {
+                            try result.append(allocator, input[index]);
+                            index += 1;
                         }
-                        i += 6;
-                    } else {
-                        try result.append(allocator, input[i]);
-                        i += 1;
-                    }
-                },
-                else => {
-                    try result.append(allocator, input[i]);
-                    i += 1;
-                },
+                    },
+                    else => {
+                        try result.append(allocator, input[index]);
+                        index += 1;
+                    },
+                }
+            } else {
+                try result.append(allocator, input[index]);
+                index += 1;
             }
         } else {
-            try result.append(allocator, input[i]);
-            i += 1;
+            try result.append(allocator, input[index]);
+            index += 1;
         }
     }
 }
 
 fn stripTrailingCr(line: []const u8) []const u8 {
-    if (line.len > 0 and line[line.len - 1] == '\r') {
-        return line[0 .. line.len - 1];
+    if (line.len > 0) {
+        if (line[line.len - 1] == '\r') {
+            return line[0 .. line.len - 1];
+        }
     }
     return line;
 }
@@ -447,23 +516,26 @@ fn parseKvLineWithString(
             const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
-            const field_info = @typeInfo(field.type);
-            const is_string_slice = field_info == .pointer and
-                field_info.pointer.size == .slice and
-                field_info.pointer.child == u8;
-            if (is_string_slice) {
-                @field(result, field.name) = value;
-                fields_seen[index] = true;
-                return;
-            } else if (field_info == .optional) {
-                const child_info = @typeInfo(field_info.optional.child);
-                const is_optional_string = child_info == .pointer and
-                    child_info.pointer.size == .slice and
-                    child_info.pointer.child == u8;
-                if (is_optional_string) {
-                    @field(result, field.name) = value;
-                    fields_seen[index] = true;
-                    return;
+
+            const field_type_info = @typeInfo(field.type);
+            if (field_type_info == .pointer) {
+                if (field_type_info.pointer.size == .slice) {
+                    if (field_type_info.pointer.child == u8) {
+                        @field(result, field.name) = value;
+                        fields_seen[index] = true;
+                        return;
+                    }
+                }
+            } else if (field_type_info == .optional) {
+                const child_type_info = @typeInfo(field_type_info.optional.child);
+                if (child_type_info == .pointer) {
+                    if (child_type_info.pointer.size == .slice) {
+                        if (child_type_info.pointer.child == u8) {
+                            @field(result, field.name) = value;
+                            fields_seen[index] = true;
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -471,6 +543,8 @@ fn parseKvLineWithString(
 }
 
 fn extractBracketedName(line: []const u8, start_index: usize, end_index: usize) []const u8 {
+    std.debug.assert(start_index < end_index);
+    std.debug.assert(end_index <= line.len);
     return std.mem.trim(u8, line[start_index..end_index], " ");
 }
 
@@ -478,136 +552,132 @@ fn dispatchTable(
     comptime T: type,
     result: *T,
     fields_seen: *[std.meta.fields(T).len]bool,
-    allocator: std.mem.Allocator,
-    lines: *std.mem.SplitIterator(u8, .scalar),
-    line_ptr: *?[]const u8,
+    parser: *Parser,
     table_name: []const u8,
-) !void {
+) !bool {
     const struct_info = @typeInfo(T).@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
         if (common.matchesInputKey(.toml, T, field.name, table_name)) {
             const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) {
-                skipSection(lines, line_ptr);
-                return;
+                parser.next();
+                skipSection(parser);
+                return true;
             }
             if (fields_seen[index]) return error.DuplicateField;
-            const field_info = @typeInfo(field.type);
-            if (field_info == .@"struct") {
-                const parsed = try parseStructFull(
-                    field.type,
-                    allocator,
-                    lines,
-                    line_ptr,
-                    false,
-                );
+
+            const field_type_info = @typeInfo(field.type);
+            if (field_type_info == .@"struct") {
+                parser.next();
+                const parsed = try parseStructFull(field.type, parser, .nested);
                 @field(result, field.name) = parsed;
                 fields_seen[index] = true;
-                return;
+                return true;
             }
-            if (field_info == .optional and @typeInfo(field_info.optional.child) == .@"struct") {
-                const parsed = try parseStructFull(
-                    field_info.optional.child,
-                    allocator,
-                    lines,
-                    line_ptr,
-                    false,
-                );
-                @field(result, field.name) = parsed;
-                fields_seen[index] = true;
-                return;
+            if (field_type_info == .optional) {
+                if (@typeInfo(field_type_info.optional.child) == .@"struct") {
+                    parser.next();
+                    const parsed = try parseStructFull(field_type_info.optional.child, parser, .nested);
+                    @field(result, field.name) = parsed;
+                    fields_seen[index] = true;
+                    return true;
+                }
             }
         }
     }
-    skipSection(lines, line_ptr);
+    return false;
 }
 
 fn dispatchTableArray(
     comptime T: type,
     result: *T,
     fields_seen: *[std.meta.fields(T).len]bool,
-    allocator: std.mem.Allocator,
-    lines: *std.mem.SplitIterator(u8, .scalar),
-    line_ptr: *?[]const u8,
+    parser: *Parser,
     array_name: []const u8,
-) !void {
+) !bool {
     const struct_info = @typeInfo(T).@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
         if (common.matchesInputKey(.toml, T, field.name, array_name)) {
             const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) {
-                skipSection(lines, line_ptr);
-                return;
+                parser.next();
+                skipSection(parser);
+                return true;
             }
             if (fields_seen[index]) return error.DuplicateField;
-            const field_info = @typeInfo(field.type);
-            if (field_info == .pointer and field_info.pointer.size == .slice) {
-                const child_info = @typeInfo(field_info.pointer.child);
-                if (child_info == .@"struct") {
-                    @field(result, field.name) = try parseTableArray(
-                        field_info.pointer.child,
-                        allocator,
-                        lines,
-                        line_ptr,
-                        array_name,
-                    );
-                    fields_seen[index] = true;
-                    return;
+
+            const field_type_info = @typeInfo(field.type);
+            if (field_type_info == .pointer) {
+                if (field_type_info.pointer.size == .slice) {
+                    const child_type_info = @typeInfo(field_type_info.pointer.child);
+                    if (child_type_info == .@"struct") {
+                        parser.next();
+                        @field(result, field.name) = try parseTableArray(
+                            field_type_info.pointer.child,
+                            parser,
+                            array_name,
+                        );
+                        fields_seen[index] = true;
+                        return true;
+                    }
                 }
             }
         }
     }
-    skipSection(lines, line_ptr);
+    return false;
 }
 
 fn parseTableArray(
     comptime Item: type,
-    allocator: std.mem.Allocator,
-    lines: *std.mem.SplitIterator(u8, .scalar),
-    line_ptr: *?[]const u8,
+    parser: *Parser,
     array_name: []const u8,
 ) ![]Item {
     var list = std.ArrayList(Item).empty;
-    errdefer list.deinit(allocator);
+    errdefer list.deinit(parser.allocator);
 
-    // line_ptr already points past the first [[array]] header (advanced by caller).
+    // Initial [[array]] header was already consumed by dispatchTableArray.
     while (true) {
-        const item = try parseStructFull(Item, allocator, lines, line_ptr, true);
-        try list.append(allocator, item);
+        const item = try parseStructFull(Item, parser, .array_element);
+        try list.append(parser.allocator, item);
 
-        // parseStructFull(in_array=true) stops at [[array]] headers without consuming them.
-        // Check if it's another element of this array.
-        if (line_ptr.*) |next_line| {
+        // Check if the next header is another element of this same array.
+        if (parser.line_ptr) |next_line| {
             const next_trimmed = std.mem.trim(u8, next_line, " \r");
-            if (next_trimmed.len > 3 and next_trimmed[0] == '[' and next_trimmed[1] == '[') {
-                const next_name = extractBracketedName(next_trimmed, 2, next_trimmed.len - 2);
-                if (std.mem.eql(u8, next_name, array_name)) {
-                    line_ptr.* = lines.next();
-                    continue;
+            if (next_trimmed.len > 3) {
+                if (next_trimmed[0] == '[') {
+                    if (next_trimmed[1] == '[') {
+                        const next_name = extractBracketedName(next_trimmed, 2, next_trimmed.len - 2);
+                        if (std.mem.eql(u8, next_name, array_name)) {
+                            parser.next();
+                            continue;
+                        }
+                    }
                 }
             }
         }
         break;
     }
-    return try list.toOwnedSlice(allocator);
+    return try list.toOwnedSlice(parser.allocator);
 }
 
-fn skipSection(
-    lines: *std.mem.SplitIterator(u8, .scalar),
-    line_ptr: *?[]const u8,
-) void {
-    while (line_ptr.*) |raw_line| {
+fn skipSection(parser: *Parser) void {
+    while (parser.line_ptr) |raw_line| {
         const trimmed = std.mem.trim(u8, raw_line, " \r");
-        if (trimmed.len == 0 or trimmed[0] == '#') {
-            line_ptr.* = lines.next();
+        if (trimmed.len == 0) {
+            parser.next();
             continue;
         }
+        if (trimmed[0] == '#') {
+            parser.next();
+            continue;
+        }
+
         if (trimmed[0] == '[') {
             return;
         }
-        line_ptr.* = lines.next();
+        parser.next();
     }
 }
 
@@ -625,11 +695,12 @@ fn parseKvLine(
             const config = common.deserializeConfig(.toml, T, field.name);
             if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
+
             // Use a comptime switch to avoid instantiating parseTomlValue for struct types.
             switch (@typeInfo(field.type)) {
                 .@"struct" => {},
-                .optional => |optional_info| {
-                    if (@typeInfo(optional_info.child) == .@"struct") {
+                .optional => |optional_type_info| {
+                    if (@typeInfo(optional_type_info.child) == .@"struct") {
                         // Optional structs are handled by dispatchTable for [table] sections.
                     } else {
                         const parsed = try parseTomlValue(field.type, allocator, raw_value);
@@ -637,8 +708,8 @@ fn parseKvLine(
                         fields_seen[index] = true;
                     }
                 },
-                .pointer => |pointer_info| {
-                    if (pointer_info.size == .slice) {
+                .pointer => |pointer_type_info| {
+                    if (pointer_type_info.size == .slice) {
                         const parsed = try parseTomlValue(field.type, allocator, raw_value);
                         @field(result, field.name) = parsed;
                         fields_seen[index] = true;
@@ -660,8 +731,8 @@ fn parseTomlValue(
     allocator: std.mem.Allocator,
     raw_value: []const u8,
 ) !T {
-    const info = @typeInfo(T);
-    switch (info) {
+    const type_info = @typeInfo(T);
+    switch (type_info) {
         .bool => {
             if (std.mem.eql(u8, raw_value, "true")) return true;
             if (std.mem.eql(u8, raw_value, "false")) return false;
@@ -673,36 +744,37 @@ fn parseTomlValue(
         .float => {
             return std.fmt.parseFloat(T, raw_value);
         },
-        .pointer => |pointer_info| {
-            if (pointer_info.size == .slice and pointer_info.child == u8) {
-                return try scanString(allocator, raw_value);
-            } else if (pointer_info.size == .slice) {
-                return try parseInlineArray(pointer_info.child, allocator, raw_value);
+        .pointer => |pointer_type_info| {
+            if (pointer_type_info.size == .slice) {
+                if (pointer_type_info.child == u8) {
+                    return try scanString(allocator, raw_value);
+                } else {
+                    return try parseInlineArray(pointer_type_info.child, allocator, raw_value);
+                }
             } else {
                 @compileError("unsupported pointer type: " ++ @typeName(T));
             }
         },
-        .array => |array_info| {
-            if (array_info.child == u8) {
-                const src = try scanString(allocator, raw_value);
+        .array => |array_type_info| {
+            if (array_type_info.child == u8) {
+                const source = try scanString(allocator, raw_value);
                 var result: T = undefined;
-                const len = @min(src.len, array_info.len);
-                @memcpy(result[0..len], src[0..len]);
-                @memset(result[len..], 0);
+                const length = @min(source.len, array_type_info.len);
+                @memcpy(result[0..length], source[0..length]);
+                @memset(result[length..], 0);
                 return result;
             }
             @compileError("unsupported array type: " ++ @typeName(T));
         },
-        .optional => |optional_info| {
-            if (std.mem.eql(u8, raw_value, "\"\"") or std.mem.eql(u8, raw_value, "null")) {
-                return null;
-            }
-            return try parseTomlValue(optional_info.child, allocator, raw_value);
+        .optional => |optional_type_info| {
+            if (std.mem.eql(u8, raw_value, "\"\"")) return null;
+            if (std.mem.eql(u8, raw_value, "null")) return null;
+            return try parseTomlValue(optional_type_info.child, allocator, raw_value);
         },
-        .@"enum" => |enum_info| {
-            const str = try scanString(allocator, raw_value);
-            inline for (enum_info.fields) |field| {
-                if (std.mem.eql(u8, field.name, str)) {
+        .@"enum" => |enum_type_info| {
+            const string = try scanString(allocator, raw_value);
+            inline for (enum_type_info.fields) |field| {
+                if (std.mem.eql(u8, field.name, string)) {
                     return @enumFromInt(field.value);
                 }
             }
@@ -718,40 +790,59 @@ fn parseInlineArray(
     raw_value: []const u8,
 ) ![]Item {
     const content = std.mem.trim(u8, raw_value, " ");
-    if (content.len < 2 or content[0] != '[' or content[content.len - 1] != ']') {
-        return error.UnexpectedToken;
-    }
+    if (content.len < 2) return error.UnexpectedToken;
+    if (content[0] != '[') return error.UnexpectedToken;
+    if (content[content.len - 1] != ']') return error.UnexpectedToken;
+
     const inner = std.mem.trim(u8, content[1 .. content.len - 1], " ");
     if (inner.len == 0) return &[_]Item{};
 
     var list = std.ArrayList(Item).empty;
     errdefer list.deinit(allocator);
 
-    var i: usize = 0;
-    while (i < inner.len) {
+    var index: usize = 0;
+    while (index < inner.len) {
         // Skip leading whitespace.
-        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
-        if (i >= inner.len) break;
+        while (index < inner.len) {
+            if (inner[index] == ' ') {
+                index += 1;
+            } else {
+                break;
+            }
+        }
+        if (index >= inner.len) break;
 
         // Find end of element, respecting quoted strings.
-        const start = i;
-        if (inner[i] == '"') {
-            i += 1;
-            while (i < inner.len) : (i += 1) {
-                if (inner[i] == '\\' and i + 1 < inner.len) {
-                    i += 1;
-                } else if (inner[i] == '"') {
-                    i += 1;
+        const start = index;
+        if (inner[index] == '"') {
+            index += 1;
+            while (index < inner.len) : (index += 1) {
+                if (inner[index] == '\\') {
+                    if (index + 1 < inner.len) {
+                        index += 1;
+                    }
+                } else if (inner[index] == '"') {
+                    index += 1;
                     break;
                 }
             }
         } else {
-            while (i < inner.len and inner[i] != ',') : (i += 1) {}
+            while (index < inner.len) {
+                if (inner[index] != ',') {
+                    index += 1;
+                } else {
+                    break;
+                }
+            }
         }
-        const end = i;
+        const end = index;
 
         // Skip comma.
-        if (i < inner.len and inner[i] == ',') i += 1;
+        if (index < inner.len) {
+            if (inner[index] == ',') {
+                index += 1;
+            }
+        }
 
         const element = std.mem.trim(u8, inner[start..end], " ");
         const parsed = try parseTomlPrimitive(Item, allocator, element);
@@ -761,8 +852,8 @@ fn parseInlineArray(
 }
 
 fn parseTomlPrimitive(comptime T: type, allocator: std.mem.Allocator, raw_value: []const u8) !T {
-    const info = @typeInfo(T);
-    switch (info) {
+    const type_info = @typeInfo(T);
+    switch (type_info) {
         .bool => {
             if (std.mem.eql(u8, raw_value, "true")) return true;
             if (std.mem.eql(u8, raw_value, "false")) return false;
@@ -770,9 +861,11 @@ fn parseTomlPrimitive(comptime T: type, allocator: std.mem.Allocator, raw_value:
         },
         .int => return std.fmt.parseInt(T, raw_value, 10),
         .float => return std.fmt.parseFloat(T, raw_value),
-        .pointer => |pointer_info| {
-            if (pointer_info.size == .slice and pointer_info.child == u8) {
-                return try scanString(allocator, raw_value);
+        .pointer => |pointer_type_info| {
+            if (pointer_type_info.size == .slice) {
+                if (pointer_type_info.child == u8) {
+                    return try scanString(allocator, raw_value);
+                }
             }
             return error.UnsupportedType;
         },
@@ -784,8 +877,8 @@ fn scanString(allocator: std.mem.Allocator, raw_value: []const u8) ![]const u8 {
     var scanner = std.json.Scanner.initCompleteInput(allocator, raw_value);
     defer scanner.deinit();
     return switch (try scanner.nextAlloc(allocator, .alloc_always)) {
-        .string => |str| str,
-        .allocated_string => |str| str,
+        .string => |string| string,
+        .allocated_string => |string| string,
         else => error.UnexpectedToken,
     };
 }
@@ -1322,6 +1415,23 @@ test "serde_fields toml skip with default" {
     defer result.deinit();
     try std.testing.expectEqual(@as(u32, 9), result.value.id);
     try std.testing.expectEqualStrings("hidden", result.value.secret);
+}
+
+test "deserialize nested structs in order" {
+    const A = struct { x: i32 };
+    const B = struct { y: i32 };
+    const Config = struct { a: A, b: B };
+    const serde = Serde(Config);
+    const input =
+        \\[a]
+        \\x = 1
+        \\[b]
+        \\y = 2
+    ;
+    var result = try serde.deserialize(std.testing.allocator, input);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(i32, 1), result.value.a.x);
+    try std.testing.expectEqual(@as(i32, 2), result.value.b.y);
 }
 
 test "roundtrip: optional struct" {

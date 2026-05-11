@@ -85,22 +85,22 @@ pub const EffectiveDeserializeOptions = struct {
 };
 
 pub fn effectiveSerializeOptions(options: FormatFieldOptions) EffectiveSerializeOptions {
-    if (options.serialize) |s| {
+    if (options.serialize) |serialize_options| {
         return .{
-            .rename = s.rename,
-            .skip = s.skip,
-            .omit_null = s.omit_null,
+            .rename = serialize_options.rename,
+            .skip = serialize_options.skip,
+            .omit_null = serialize_options.omit_null,
         };
     }
     return .{};
 }
 
 pub fn effectiveDeserializeOptions(options: FormatFieldOptions) EffectiveDeserializeOptions {
-    if (options.deserialize) |d| {
+    if (options.deserialize) |deserialize_options| {
         return .{
-            .rename = d.rename,
-            .skip = d.skip,
-            .alias = d.alias,
+            .rename = deserialize_options.rename,
+            .skip = deserialize_options.skip,
+            .alias = deserialize_options.alias,
         };
     }
     return .{};
@@ -108,119 +108,131 @@ pub fn effectiveDeserializeOptions(options: FormatFieldOptions) EffectiveDeseria
 
 /// Returns the `SerdeFieldOptions` for `field_name` on `T`, parsed from `T.serde_fields`.
 pub fn fieldOptions(comptime T: type, comptime field_name: []const u8) SerdeFieldOptions {
-    const info = @typeInfo(T);
-    if (info != .@"struct" and info != .@"union" and info != .@"enum" and info != .@"opaque") {
-        return .{};
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") {
+        if (type_info != .@"union") {
+            if (type_info != .@"enum") {
+                if (type_info != .@"opaque") {
+                    return .{};
+                }
+            }
+        }
     }
     if (!@hasDecl(T, "serde_fields")) return .{};
     const serde_fields = @field(T, "serde_fields");
     if (!@hasField(@TypeOf(serde_fields), field_name)) return .{};
 
-    const field_meta = @field(serde_fields, field_name);
-    const field_meta_type = @TypeOf(field_meta);
-    const field_meta_info = @typeInfo(field_meta_type);
-    if (field_meta_info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ " must be a struct");
+    const field_metadata = @field(serde_fields, field_name);
+    const field_metadata_type = @TypeOf(field_metadata);
+    const field_metadata_type_info = @typeInfo(field_metadata_type);
+    if (field_metadata_type_info != .@"struct") {
+        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ " must be a struct.");
     }
 
-    inline for (field_meta_info.@"struct".fields) |meta_field| {
-        if (!@hasField(SerdeFieldOptions, meta_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ " has unknown format key: " ++ meta_field.name);
+    inline for (field_metadata_type_info.@"struct".fields) |metadata_field| {
+        if (!@hasField(SerdeFieldOptions, metadata_field.name)) {
+            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ " has unknown format key: " ++ metadata_field.name);
         }
     }
 
     var options: SerdeFieldOptions = .{};
-    if (@hasField(field_meta_type, "json")) options.json = parseFormatFieldOptions(T, field_name, .json, @field(field_meta, "json"));
-    if (@hasField(field_meta_type, "toml")) options.toml = parseFormatFieldOptions(T, field_name, .toml, @field(field_meta, "toml"));
-    if (@hasField(field_meta_type, "yaml")) options.yaml = parseFormatFieldOptions(T, field_name, .yaml, @field(field_meta, "yaml"));
-    if (@hasField(field_meta_type, "protobuf")) options.protobuf = parseProtobufFieldOptions(T, field_name, @field(field_meta, "protobuf"));
+    if (@hasField(field_metadata_type, "json")) options.json = parseFormatFieldOptions(T, field_name, .json, @field(field_metadata, "json"));
+    if (@hasField(field_metadata_type, "toml")) options.toml = parseFormatFieldOptions(T, field_name, .toml, @field(field_metadata, "toml"));
+    if (@hasField(field_metadata_type, "yaml")) options.yaml = parseFormatFieldOptions(T, field_name, .yaml, @field(field_metadata, "yaml"));
+    if (@hasField(field_metadata_type, "protobuf")) options.protobuf = parseProtobufFieldOptions(T, field_name, @field(field_metadata, "protobuf"));
     return options;
 }
 
-fn parseFormatFieldOptions(comptime T: type, comptime field_name: []const u8, comptime format_name: Format, format_meta: anytype) FormatFieldOptions {
-    const meta_type = @TypeOf(format_meta);
-    const info = @typeInfo(meta_type);
+fn parseFormatFieldOptions(comptime T: type, comptime field_name: []const u8, comptime format_name: Format, format_metadata: anytype) FormatFieldOptions {
+    const metadata_type = @TypeOf(format_metadata);
+    const type_info = @typeInfo(metadata_type);
     const format_tag = @tagName(format_name);
     const prefix = @typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag;
-    if (info != .@"struct") {
-        @compileError(prefix ++ " must be a struct");
+    if (type_info != .@"struct") {
+        @compileError(prefix ++ " must be a struct.");
     }
-    inline for (info.@"struct".fields) |meta_field| {
-        if (!@hasField(FormatFieldOptions, meta_field.name)) {
-            @compileError(prefix ++ " has unknown key: " ++ meta_field.name);
+    inline for (type_info.@"struct".fields) |metadata_field| {
+        if (!@hasField(FormatFieldOptions, metadata_field.name)) {
+            @compileError(prefix ++ " has unknown key: " ++ metadata_field.name);
         }
     }
     var options: FormatFieldOptions = .{};
-    if (@hasField(meta_type, "serialize")) options.serialize = parseSerializeOptions(T, field_name, format_tag, @field(format_meta, "serialize"));
-    if (@hasField(meta_type, "deserialize")) options.deserialize = parseDeserializeOptions(T, field_name, format_tag, @field(format_meta, "deserialize"));
+    if (@hasField(metadata_type, "serialize")) options.serialize = parseSerializeOptions(T, field_name, format_tag, @field(format_metadata, "serialize"));
+    if (@hasField(metadata_type, "deserialize")) options.deserialize = parseDeserializeOptions(T, field_name, format_tag, @field(format_metadata, "deserialize"));
     return options;
 }
 
-fn parseSerializeOptions(comptime T: type, comptime field_name: []const u8, comptime format_tag: []const u8, serialize_meta: anytype) SerializeOptions {
-    const meta_type = @TypeOf(serialize_meta);
-    const info = @typeInfo(meta_type);
-    if (info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".serialize must be a struct");
+fn parseSerializeOptions(comptime T: type, comptime field_name: []const u8, comptime format_tag: []const u8, serialize_metadata: anytype) SerializeOptions {
+    const metadata_type = @TypeOf(serialize_metadata);
+    const type_info = @typeInfo(metadata_type);
+    if (type_info != .@"struct") {
+        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".serialize must be a struct.");
     }
-    inline for (info.@"struct".fields) |meta_field| {
-        if (!@hasField(SerializeOptions, meta_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".serialize has unknown key: " ++ meta_field.name);
+    inline for (type_info.@"struct".fields) |metadata_field| {
+        if (!@hasField(SerializeOptions, metadata_field.name)) {
+            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".serialize has unknown key: " ++ metadata_field.name);
         }
     }
     var options: SerializeOptions = .{};
-    if (@hasField(meta_type, "rename")) options.rename = @field(serialize_meta, "rename");
-    if (@hasField(meta_type, "skip")) options.skip = @field(serialize_meta, "skip");
-    if (@hasField(meta_type, "omit_null")) options.omit_null = @field(serialize_meta, "omit_null");
+    if (@hasField(metadata_type, "rename")) options.rename = @field(serialize_metadata, "rename");
+    if (@hasField(metadata_type, "skip")) options.skip = @field(serialize_metadata, "skip");
+    if (@hasField(metadata_type, "omit_null")) options.omit_null = @field(serialize_metadata, "omit_null");
     return options;
 }
 
-fn parseDeserializeOptions(comptime T: type, comptime field_name: []const u8, comptime format_tag: []const u8, deserialize_meta: anytype) DeserializeOptions {
-    const meta_type = @TypeOf(deserialize_meta);
-    const info = @typeInfo(meta_type);
-    if (info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".deserialize must be a struct");
+fn parseDeserializeOptions(comptime T: type, comptime field_name: []const u8, comptime format_tag: []const u8, deserialize_metadata: anytype) DeserializeOptions {
+    const metadata_type = @TypeOf(deserialize_metadata);
+    const type_info = @typeInfo(metadata_type);
+    if (type_info != .@"struct") {
+        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".deserialize must be a struct.");
     }
-    inline for (info.@"struct".fields) |meta_field| {
-        if (!@hasField(DeserializeOptions, meta_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".deserialize has unknown key: " ++ meta_field.name);
+    inline for (type_info.@"struct".fields) |metadata_field| {
+        if (!@hasField(DeserializeOptions, metadata_field.name)) {
+            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".deserialize has unknown key: " ++ metadata_field.name);
         }
     }
     var options: DeserializeOptions = .{};
-    if (@hasField(meta_type, "rename")) options.rename = @field(deserialize_meta, "rename");
-    if (@hasField(meta_type, "skip")) options.skip = @field(deserialize_meta, "skip");
-    if (@hasField(meta_type, "alias")) options.alias = @field(deserialize_meta, "alias");
+    if (@hasField(metadata_type, "rename")) options.rename = @field(deserialize_metadata, "rename");
+    if (@hasField(metadata_type, "skip")) options.skip = @field(deserialize_metadata, "skip");
+    if (@hasField(metadata_type, "alias")) options.alias = @field(deserialize_metadata, "alias");
     return options;
 }
 
-fn parseProtobufFieldOptions(comptime T: type, comptime field_name: []const u8, protobuf_meta: anytype) ProtobufFieldOptions {
-    const meta_type = @TypeOf(protobuf_meta);
-    const info = @typeInfo(meta_type);
-    if (info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ ".protobuf must be a struct");
+fn parseProtobufFieldOptions(comptime T: type, comptime field_name: []const u8, protobuf_metadata: anytype) ProtobufFieldOptions {
+    const metadata_type = @TypeOf(protobuf_metadata);
+    const type_info = @typeInfo(metadata_type);
+    if (type_info != .@"struct") {
+        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ ".protobuf must be a struct.");
     }
-    inline for (info.@"struct".fields) |meta_field| {
-        if (!@hasField(ProtobufFieldOptions, meta_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ ".protobuf has unknown key: " ++ meta_field.name);
+    inline for (type_info.@"struct".fields) |metadata_field| {
+        if (!@hasField(ProtobufFieldOptions, metadata_field.name)) {
+            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ ".protobuf has unknown key: " ++ metadata_field.name);
         }
     }
     var options: ProtobufFieldOptions = .{};
-    if (@hasField(meta_type, "field_number")) options.field_number = @field(protobuf_meta, "field_number");
+    if (@hasField(metadata_type, "field_number")) options.field_number = @field(protobuf_metadata, "field_number");
     return options;
 }
 
 /// Validates that every key in `T.serde_fields` corresponds to an actual field on `T`.
 pub fn validateSerdeFieldNames(comptime T: type) void {
-    const t_info = @typeInfo(T);
-    if (t_info != .@"struct" and t_info != .@"union" and t_info != .@"enum" and t_info != .@"opaque") {
-        return;
+    const t_type_info = @typeInfo(T);
+    if (t_type_info != .@"struct") {
+        if (t_type_info != .@"union") {
+            if (t_type_info != .@"enum") {
+                if (t_type_info != .@"opaque") {
+                    return;
+                }
+            }
+        }
     }
     if (!@hasDecl(T, "serde_fields")) return;
     const serde_fields = @field(T, "serde_fields");
-    const info = @typeInfo(@TypeOf(serde_fields));
-    if (info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields must be a struct");
+    const type_info = @typeInfo(@TypeOf(serde_fields));
+    if (type_info != .@"struct") {
+        @compileError(@typeName(T) ++ ".serde_fields must be a struct.");
     }
-    inline for (info.@"struct".fields) |decl_field| {
+    inline for (type_info.@"struct".fields) |decl_field| {
         if (!@hasField(T, decl_field.name)) {
             @compileError(@typeName(T) ++ ".serde_fields contains unknown field: " ++ decl_field.name);
         }
@@ -266,43 +278,57 @@ pub fn matchesInputKey(comptime format: Format, comptime T: type, comptime field
 }
 
 /// Validates field configs for `T` in the given `format`:
-/// - skip fields must be optional or have defaults
-/// - skip is mutually exclusive with rename, omit_null, and alias
-/// - omit_null on non-optional fields is an error
-/// - alias must not duplicate the rename or field name
-/// - no two fields may share the same serialized or deserialized name or alias
+/// - skip fields must be optional or have defaults.
+/// - skip is mutually exclusive with rename, omit_null, and alias.
+/// - omit_null on non-optional fields is an error.
+/// - alias must not duplicate the rename or field name.
+/// - no two fields may share the same serialized or deserialized name or alias.
 pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
     const format_tag = @tagName(format);
-    const info = @typeInfo(T);
-    if (info != .@"struct") return;
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") return;
     validateSerdeFieldNames(T);
-    const struct_info = info.@"struct";
+    const struct_info = type_info.@"struct";
 
     inline for (struct_info.fields) |field| {
         const serialize_options = serializeConfig(format, T, field.name);
         const deserialize_options = deserializeConfig(format, T, field.name);
         const skip = serialize_options.skip or deserialize_options.skip;
-        if (skip and field.default_value_ptr == null and @typeInfo(field.type) != .optional) {
-            @compileError(format_tag ++ " skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
+        if (skip) {
+            if (field.default_value_ptr == null) {
+                if (@typeInfo(field.type) != .optional) {
+                    @compileError(format_tag ++ " skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
+                }
+            }
         }
-        // skip makes rename/omit_null/alias meaningless
-        if (serialize_options.skip and serialize_options.rename != null) {
-            @compileError(format_tag ++ " serialize.skip and serialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+        // Skip makes rename/omit_null/alias meaningless.
+        if (serialize_options.skip) {
+            if (serialize_options.rename != null) {
+                @compileError(format_tag ++ " serialize.skip and serialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+            }
         }
-        if (serialize_options.skip and serialize_options.omit_null) {
-            @compileError(format_tag ++ " serialize.skip and serialize.omit_null are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+        if (serialize_options.skip) {
+            if (serialize_options.omit_null) {
+                @compileError(format_tag ++ " serialize.skip and serialize.omit_null are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+            }
         }
-        if (deserialize_options.skip and deserialize_options.rename != null) {
-            @compileError(format_tag ++ " deserialize.skip and deserialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+        if (deserialize_options.skip) {
+            if (deserialize_options.rename != null) {
+                @compileError(format_tag ++ " deserialize.skip and deserialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+            }
         }
-        if (deserialize_options.skip and deserialize_options.alias.len > 0) {
-            @compileError(format_tag ++ " deserialize.skip and deserialize.alias are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+        if (deserialize_options.skip) {
+            if (deserialize_options.alias.len > 0) {
+                @compileError(format_tag ++ " deserialize.skip and deserialize.alias are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+            }
         }
-        // omit_null on non-optional field has no effect
-        if (serialize_options.omit_null and @typeInfo(field.type) != .optional) {
-            @compileError(format_tag ++ " serialize.omit_null on non-optional field has no effect: " ++ @typeName(T) ++ "." ++ field.name);
+        // Omit_null on non-optional field has no effect.
+        if (serialize_options.omit_null) {
+            if (@typeInfo(field.type) != .optional) {
+                @compileError(format_tag ++ " serialize.omit_null on non-optional field has no effect: " ++ @typeName(T) ++ "." ++ field.name);
+            }
         }
-        // alias must not duplicate the rename or field name
+        // Alias must not duplicate the rename or field name.
         if (deserialize_options.rename) |rename| {
             for (deserialize_options.alias) |alias_name| {
                 if (std.mem.eql(u8, alias_name, rename)) {
@@ -340,8 +366,10 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
                 @compileError(format_tag ++ " deserialize key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
             }
             // Deserialize name of left must not collide with serialize name of right.
-            if (!std.mem.eql(u8, left.name, right.name) and std.mem.eql(u8, left_deserialize_name, right_serialize_name)) {
-                @compileError(format_tag ++ " key conflict in " ++ @typeName(T) ++ ": deserialize key of " ++ left.name ++ " collides with serialize key of " ++ right.name);
+            if (!std.mem.eql(u8, left.name, right.name)) {
+                if (std.mem.eql(u8, left_deserialize_name, right_serialize_name)) {
+                    @compileError(format_tag ++ " key conflict in " ++ @typeName(T) ++ ": deserialize key of " ++ left.name ++ " collides with serialize key of " ++ right.name);
+                }
             }
 
             for (left_deserialize.alias) |left_alias| {
@@ -359,13 +387,13 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
 }
 
 /// Validates protobuf field_number values for `T`:
-/// - field_number must be non-zero
-/// - field_number must be in range 1..2^29-1, excluding 19000..19999 (reserved)
-/// - no two fields may share the same field_number
+/// - field_number must be non-zero.
+/// - field_number must be in range 1..2^29-1, excluding 19000..19999 (reserved).
+/// - no two fields may share the same field_number.
 pub fn validateProtobufFieldNumbers(comptime T: type) void {
-    const info = @typeInfo(T);
-    if (info != .@"struct") return;
-    const struct_info = info.@"struct";
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") return;
+    const struct_info = type_info.@"struct";
 
     inline for (struct_info.fields, 0..) |field, index| {
         const options = fieldOptions(T, field.name);
@@ -374,8 +402,10 @@ pub fn validateProtobufFieldNumbers(comptime T: type) void {
                 if (number == 0) {
                     @compileError("protobuf field_number must be non-zero on " ++ @typeName(T) ++ "." ++ field.name);
                 }
-                if (number >= 19000 and number <= 19999) {
-                    @compileError("protobuf field_number 19000-19999 is reserved on " ++ @typeName(T) ++ "." ++ field.name);
+                if (number >= 19000) {
+                    if (number <= 19999) {
+                        @compileError("protobuf field_number 19000-19999 is reserved on " ++ @typeName(T) ++ "." ++ field.name);
+                    }
                 }
                 if (number > 536870911) {
                     @compileError("protobuf field_number exceeds max 2^29-1 on " ++ @typeName(T) ++ "." ++ field.name);
@@ -395,8 +425,10 @@ pub fn validateProtobufFieldNumbers(comptime T: type) void {
 }
 
 /// Returns the effective protobuf field number for the field at `index` in `T`.
-fn effectiveProtobufFieldNumber(comptime T: type, comptime index: usize) u32 {
-    const struct_info = @typeInfo(T).@"struct";
+pub fn effectiveProtobufFieldNumber(comptime T: type, comptime index: usize) u32 {
+    const type_info = @typeInfo(T);
+    std.debug.assert(type_info == .@"struct");
+    const struct_info = type_info.@"struct";
     const field = struct_info.fields[index];
     const options = fieldOptions(T, field.name);
     if (options.protobuf) |protobuf_options| {
@@ -441,10 +473,11 @@ pub fn shouldIncludeField(comptime format: Format, comptime T: type, comptime fi
 }
 
 /// Fills in default/null values for fields not present in the deserialized input.
-/// Returns `error.MissingField` if a required field has no default and is not skipped.
-pub fn fillMissingFields(comptime format: Format, comptime T: type, result: *T, fields_seen: []const bool) !void {
-    _ = format;
-    const struct_info = @typeInfo(T).@"struct";
+/// Returns `error.MissingField` if a required field has no default and is not optional.
+pub fn fillMissingFields(comptime T: type, result: *T, fields_seen: []const bool) !void {
+    const type_info = @typeInfo(T);
+    std.debug.assert(type_info == .@"struct");
+    const struct_info = type_info.@"struct";
     inline for (struct_info.fields, 0..) |field, index| {
         if (!fields_seen[index]) {
             if (field.default_value_ptr) |default_ptr| {
