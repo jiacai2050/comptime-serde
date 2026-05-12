@@ -74,7 +74,8 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
                     switch (field_type_info) {
                         .@"struct" => {}, // Handled in pass 2.
                         .optional => |optional_type_info| {
-                            // Optional struct: handled in pass 2; optional primitives: write inline.
+                            // Optional struct: handled in pass 2; optional
+                            // primitives: write inline.
                             if (@typeInfo(optional_type_info.child) == .@"struct") {
                                 // Handled in pass 2.
                             } else {
@@ -87,7 +88,8 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
                                     // String slice → inline KV.
                                     try writeKeyValue(writer, field_key, field_value);
                                 } else {
-                                    // Non-string slice: inline if primitives, table array if structs.
+                                    // Non-string slice: inline if primitives,
+                                    // table array if structs.
                                     const child_type_info = @typeInfo(pointer_type_info.child);
                                     if (child_type_info != .@"struct") {
                                         try writeKeyValue(writer, field_key, field_value);
@@ -292,7 +294,8 @@ fn parseStructFull(
                         // Table Array Header: [[array_name]]
                         if (mode == .array_element) {
                             // We are inside an array element; a NEW [[array]] header
-                            // means this element is finished. Return to the loop in parseTableArray.
+                            // means this element is finished. Return to the
+                            // loop in parseTableArray.
                             try common.fillMissingFields(T, &result, &fields_seen);
                             return result;
                         }
@@ -422,69 +425,7 @@ fn appendUnescaped(
     allocator: std.mem.Allocator,
     input: []const u8,
 ) !void {
-    var index: usize = 0;
-    while (index < input.len) {
-        if (input[index] == '\\') {
-            if (index + 1 < input.len) {
-                switch (input[index + 1]) {
-                    '\\' => {
-                        try result.append(allocator, '\\');
-                        index += 2;
-                    },
-                    'n' => {
-                        try result.append(allocator, '\n');
-                        index += 2;
-                    },
-                    'r' => {
-                        try result.append(allocator, '\r');
-                        index += 2;
-                    },
-                    't' => {
-                        try result.append(allocator, '\t');
-                        index += 2;
-                    },
-                    '"' => {
-                        try result.append(allocator, '"');
-                        index += 2;
-                    },
-                    'u' => {
-                        if (index + 5 < input.len) {
-                            const code = std.fmt.parseInt(u21, input[index + 2 .. index + 6], 16) catch {
-                                try result.append(allocator, input[index]);
-                                index += 1;
-                                continue;
-                            };
-                            if (code < 0x80) {
-                                try result.append(allocator, @intCast(code));
-                            } else {
-                                var buffer: [4]u8 = undefined;
-                                const utf8_length = std.unicode.utf8Encode(code, &buffer) catch {
-                                    try result.append(allocator, input[index]);
-                                    index += 1;
-                                    continue;
-                                };
-                                try result.appendSlice(allocator, buffer[0..utf8_length]);
-                            }
-                            index += 6;
-                        } else {
-                            try result.append(allocator, input[index]);
-                            index += 1;
-                        }
-                    },
-                    else => {
-                        try result.append(allocator, input[index]);
-                        index += 1;
-                    },
-                }
-            } else {
-                try result.append(allocator, input[index]);
-                index += 1;
-            }
-        } else {
-            try result.append(allocator, input[index]);
-            index += 1;
-        }
-    }
+    try common.appendUnescaped(result, allocator, input, .toml);
 }
 
 fn stripTrailingCr(line: []const u8) []const u8 {
@@ -586,7 +527,8 @@ fn dispatchTable(
             if (field_type_info == .optional) {
                 if (@typeInfo(field_type_info.optional.child) == .@"struct") {
                     parser.next();
-                    const parsed = try parseStructFull(field_type_info.optional.child, parser, .nested);
+                    const Child = field_type_info.optional.child;
+                    const parsed = try parseStructFull(Child, parser, .nested);
                     @field(result, field.name) = parsed;
                     fields_seen[index] = true;
                     return true;

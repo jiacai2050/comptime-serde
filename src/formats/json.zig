@@ -71,7 +71,8 @@ pub fn Serde(comptime T: type) type {
                         if (common.shouldIncludeField(.json, T, field.name, field_value)) {
                             if (!first) try writer.writeByte(',');
                             first = false;
-                            try common.writeEscapedString(writer, common.serializedFieldName(.json, T, field.name));
+                            const key = common.serializedFieldName(.json, T, field.name);
+                            try common.writeEscapedString(writer, key);
                             try writer.writeByte(':');
                             const FieldSerializer = Serde(field.type);
                             try FieldSerializer.serialize(writer, field_value);

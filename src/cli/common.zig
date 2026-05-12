@@ -81,7 +81,8 @@ pub fn renderStructs(
     var output = std.ArrayList(u8).empty;
 
     for (structs) |struct_definition| {
-        const capitalized = capitalizeFirst(arena_alloc, struct_definition.name) catch struct_definition.name;
+        const capitalized = capitalizeFirst(arena_alloc, struct_definition.name) catch
+            struct_definition.name;
         const formatted_name = formatName(arena_alloc, capitalized) catch capitalized;
         const header = try std.fmt.allocPrint(
             arena_alloc,

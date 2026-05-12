@@ -126,19 +126,54 @@ pub fn fieldOptions(comptime T: type, comptime field_name: []const u8) SerdeFiel
 
     inline for (field_metadata_type_info.@"struct".fields) |metadata_field| {
         if (!@hasField(SerdeFieldOptions, metadata_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ " has unknown format key: " ++ metadata_field.name);
+            @compileError(
+                @typeName(T) ++ ".serde_fields." ++ field_name ++
+                    " has unknown format key: " ++ metadata_field.name,
+            );
         }
     }
 
     var options: SerdeFieldOptions = .{};
-    if (@hasField(field_metadata_type, "json")) options.json = parseFormatFieldOptions(T, field_name, .json, @field(field_metadata, "json"));
-    if (@hasField(field_metadata_type, "toml")) options.toml = parseFormatFieldOptions(T, field_name, .toml, @field(field_metadata, "toml"));
-    if (@hasField(field_metadata_type, "yaml")) options.yaml = parseFormatFieldOptions(T, field_name, .yaml, @field(field_metadata, "yaml"));
-    if (@hasField(field_metadata_type, "protobuf")) options.protobuf = parseProtobufFieldOptions(T, field_name, @field(field_metadata, "protobuf"));
+    if (@hasField(field_metadata_type, "json")) {
+        options.json = parseFormatFieldOptions(
+            T,
+            field_name,
+            .json,
+            @field(field_metadata, "json"),
+        );
+    }
+    if (@hasField(field_metadata_type, "toml")) {
+        options.toml = parseFormatFieldOptions(
+            T,
+            field_name,
+            .toml,
+            @field(field_metadata, "toml"),
+        );
+    }
+    if (@hasField(field_metadata_type, "yaml")) {
+        options.yaml = parseFormatFieldOptions(
+            T,
+            field_name,
+            .yaml,
+            @field(field_metadata, "yaml"),
+        );
+    }
+    if (@hasField(field_metadata_type, "protobuf")) {
+        options.protobuf = parseProtobufFieldOptions(
+            T,
+            field_name,
+            @field(field_metadata, "protobuf"),
+        );
+    }
     return options;
 }
 
-fn parseFormatFieldOptions(comptime T: type, comptime field_name: []const u8, comptime format_name: Format, format_metadata: anytype) FormatFieldOptions {
+fn parseFormatFieldOptions(
+    comptime T: type,
+    comptime field_name: []const u8,
+    comptime format_name: Format,
+    format_metadata: anytype,
+) FormatFieldOptions {
     const metadata_type = @TypeOf(format_metadata);
     const type_info = @typeInfo(metadata_type);
     const format_tag = @tagName(format_name);
@@ -152,38 +187,75 @@ fn parseFormatFieldOptions(comptime T: type, comptime field_name: []const u8, co
         }
     }
     var options: FormatFieldOptions = .{};
-    if (@hasField(metadata_type, "serialize")) options.serialize = parseSerializeOptions(T, field_name, format_tag, @field(format_metadata, "serialize"));
-    if (@hasField(metadata_type, "deserialize")) options.deserialize = parseDeserializeOptions(T, field_name, format_tag, @field(format_metadata, "deserialize"));
+    if (@hasField(metadata_type, "serialize")) {
+        options.serialize = parseSerializeOptions(
+            T,
+            field_name,
+            format_tag,
+            @field(format_metadata, "serialize"),
+        );
+    }
+    if (@hasField(metadata_type, "deserialize")) {
+        options.deserialize = parseDeserializeOptions(
+            T,
+            field_name,
+            format_tag,
+            @field(format_metadata, "deserialize"),
+        );
+    }
     return options;
 }
 
-fn parseSerializeOptions(comptime T: type, comptime field_name: []const u8, comptime format_tag: []const u8, serialize_metadata: anytype) SerializeOptions {
+fn parseSerializeOptions(
+    comptime T: type,
+    comptime field_name: []const u8,
+    comptime format_tag: []const u8,
+    serialize_metadata: anytype,
+) SerializeOptions {
     const metadata_type = @TypeOf(serialize_metadata);
     const type_info = @typeInfo(metadata_type);
     if (type_info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".serialize must be a struct.");
+        @compileError(
+            @typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++
+                format_tag ++ ".serialize must be a struct.",
+        );
     }
     inline for (type_info.@"struct".fields) |metadata_field| {
         if (!@hasField(SerializeOptions, metadata_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".serialize has unknown key: " ++ metadata_field.name);
+            @compileError(
+                @typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++
+                    format_tag ++ ".serialize has unknown key: " ++ metadata_field.name,
+            );
         }
     }
     var options: SerializeOptions = .{};
     if (@hasField(metadata_type, "rename")) options.rename = @field(serialize_metadata, "rename");
     if (@hasField(metadata_type, "skip")) options.skip = @field(serialize_metadata, "skip");
-    if (@hasField(metadata_type, "omit_null")) options.omit_null = @field(serialize_metadata, "omit_null");
+    if (@hasField(metadata_type, "omit_null"))
+        options.omit_null = @field(serialize_metadata, "omit_null");
     return options;
 }
 
-fn parseDeserializeOptions(comptime T: type, comptime field_name: []const u8, comptime format_tag: []const u8, deserialize_metadata: anytype) DeserializeOptions {
+fn parseDeserializeOptions(
+    comptime T: type,
+    comptime field_name: []const u8,
+    comptime format_tag: []const u8,
+    deserialize_metadata: anytype,
+) DeserializeOptions {
     const metadata_type = @TypeOf(deserialize_metadata);
     const type_info = @typeInfo(metadata_type);
     if (type_info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".deserialize must be a struct.");
+        @compileError(
+            @typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++
+                format_tag ++ ".deserialize must be a struct.",
+        );
     }
     inline for (type_info.@"struct".fields) |metadata_field| {
         if (!@hasField(DeserializeOptions, metadata_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++ format_tag ++ ".deserialize has unknown key: " ++ metadata_field.name);
+            @compileError(
+                @typeName(T) ++ ".serde_fields." ++ field_name ++ "." ++
+                    format_tag ++ ".deserialize has unknown key: " ++ metadata_field.name,
+            );
         }
     }
     var options: DeserializeOptions = .{};
@@ -193,19 +265,30 @@ fn parseDeserializeOptions(comptime T: type, comptime field_name: []const u8, co
     return options;
 }
 
-fn parseProtobufFieldOptions(comptime T: type, comptime field_name: []const u8, protobuf_metadata: anytype) ProtobufFieldOptions {
+fn parseProtobufFieldOptions(
+    comptime T: type,
+    comptime field_name: []const u8,
+    protobuf_metadata: anytype,
+) ProtobufFieldOptions {
     const metadata_type = @TypeOf(protobuf_metadata);
     const type_info = @typeInfo(metadata_type);
     if (type_info != .@"struct") {
-        @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ ".protobuf must be a struct.");
+        @compileError(
+            @typeName(T) ++ ".serde_fields." ++ field_name ++
+                ".protobuf must be a struct.",
+        );
     }
     inline for (type_info.@"struct".fields) |metadata_field| {
         if (!@hasField(ProtobufFieldOptions, metadata_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields." ++ field_name ++ ".protobuf has unknown key: " ++ metadata_field.name);
+            @compileError(
+                @typeName(T) ++ ".serde_fields." ++ field_name ++
+                    ".protobuf has unknown key: " ++ metadata_field.name,
+            );
         }
     }
     var options: ProtobufFieldOptions = .{};
-    if (@hasField(metadata_type, "field_number")) options.field_number = @field(protobuf_metadata, "field_number");
+    if (@hasField(metadata_type, "field_number"))
+        options.field_number = @field(protobuf_metadata, "field_number");
     return options;
 }
 
@@ -224,37 +307,61 @@ pub fn validateSerdeFieldNames(comptime T: type) void {
     }
     inline for (type_info.@"struct".fields) |decl_field| {
         if (!@hasField(T, decl_field.name)) {
-            @compileError(@typeName(T) ++ ".serde_fields contains unknown field: " ++ decl_field.name);
+            @compileError(
+                @typeName(T) ++ ".serde_fields contains unknown field: " ++
+                    decl_field.name,
+            );
         }
         _ = fieldOptions(T, decl_field.name);
     }
 }
 
 /// Returns the `FormatFieldOptions` for `field_name` on `T` in the given `format`.
-pub fn fieldConfig(comptime format: Format, comptime T: type, comptime field_name: []const u8) FormatFieldOptions {
+pub fn fieldConfig(
+    comptime format: Format,
+    comptime T: type,
+    comptime field_name: []const u8,
+) FormatFieldOptions {
     const options = fieldOptions(T, field_name);
     return @field(options, @tagName(format)) orelse .{};
 }
 
 /// Returns the effective serialize-side config for `field_name` on `T`.
-pub fn serializeConfig(comptime format: Format, comptime T: type, comptime field_name: []const u8) EffectiveSerializeOptions {
+pub fn serializeConfig(
+    comptime format: Format,
+    comptime T: type,
+    comptime field_name: []const u8,
+) EffectiveSerializeOptions {
     return effectiveSerializeOptions(fieldConfig(format, T, field_name));
 }
 
 /// Returns the effective deserialize-side config for `field_name` on `T`.
-pub fn deserializeConfig(comptime format: Format, comptime T: type, comptime field_name: []const u8) EffectiveDeserializeOptions {
+pub fn deserializeConfig(
+    comptime format: Format,
+    comptime T: type,
+    comptime field_name: []const u8,
+) EffectiveDeserializeOptions {
     return effectiveDeserializeOptions(fieldConfig(format, T, field_name));
 }
 
 /// Returns the renamed key for serialization of `field_name` on `T`, or `field_name` itself.
-pub fn serializedFieldName(comptime format: Format, comptime T: type, comptime field_name: []const u8) []const u8 {
+pub fn serializedFieldName(
+    comptime format: Format,
+    comptime T: type,
+    comptime field_name: []const u8,
+) []const u8 {
     return serializeConfig(format, T, field_name).rename orelse field_name;
 }
 
 /// Returns true if `key` matches `field_name` on `T`.
 /// When a rename is configured, the original field name is no longer accepted;
 /// only the rename and any aliases are matched.
-pub fn matchesInputKey(comptime format: Format, comptime T: type, comptime field_name: []const u8, key: []const u8) bool {
+pub fn matchesInputKey(
+    comptime format: Format,
+    comptime T: type,
+    comptime field_name: []const u8,
+    key: []const u8,
+) bool {
     const config = deserializeConfig(format, T, field_name);
     if (config.rename) |rename| {
         if (std.mem.eql(u8, rename, key)) return true;
@@ -287,48 +394,79 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
         if (skip) {
             if (field.default_value_ptr == null) {
                 if (@typeInfo(field.type) != .optional) {
-                    @compileError(format_tag ++ " skip field must be optional or have a default: " ++ @typeName(T) ++ "." ++ field.name);
+                    @compileError(
+                        format_tag ++ " skip field must be optional or have a default: " ++
+                            @typeName(T) ++ "." ++ field.name,
+                    );
                 }
             }
         }
         // Skip makes rename/omit_null/alias meaningless.
         if (serialize_options.skip) {
             if (serialize_options.rename != null) {
-                @compileError(format_tag ++ " serialize.skip and serialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+                @compileError(
+                    format_tag ++
+                        " serialize.skip and serialize.rename are mutually exclusive on " ++
+                        @typeName(T) ++ "." ++ field.name,
+                );
             }
         }
         if (serialize_options.skip) {
             if (serialize_options.omit_null) {
-                @compileError(format_tag ++ " serialize.skip and serialize.omit_null are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+                @compileError(
+                    format_tag ++
+                        " serialize.skip and serialize.omit_null are mutually exclusive on " ++
+                        @typeName(T) ++ "." ++ field.name,
+                );
             }
         }
         if (deserialize_options.skip) {
             if (deserialize_options.rename != null) {
-                @compileError(format_tag ++ " deserialize.skip and deserialize.rename are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+                @compileError(
+                    format_tag ++
+                        " deserialize.skip and deserialize.rename are mutually exclusive on " ++
+                        @typeName(T) ++ "." ++ field.name,
+                );
             }
         }
         if (deserialize_options.skip) {
             if (deserialize_options.alias.len > 0) {
-                @compileError(format_tag ++ " deserialize.skip and deserialize.alias are mutually exclusive on " ++ @typeName(T) ++ "." ++ field.name);
+                @compileError(
+                    format_tag ++
+                        " deserialize.skip and deserialize.alias are mutually exclusive on " ++
+                        @typeName(T) ++ "." ++ field.name,
+                );
             }
         }
         // Omit_null on non-optional field has no effect.
         if (serialize_options.omit_null) {
             if (@typeInfo(field.type) != .optional) {
-                @compileError(format_tag ++ " serialize.omit_null on non-optional field has no effect: " ++ @typeName(T) ++ "." ++ field.name);
+                @compileError(
+                    format_tag ++
+                        " serialize.omit_null on non-optional field has no effect: " ++
+                        @typeName(T) ++ "." ++ field.name,
+                );
             }
         }
         // Alias must not duplicate the rename or field name.
         if (deserialize_options.rename) |rename| {
             for (deserialize_options.alias) |alias_name| {
                 if (std.mem.eql(u8, alias_name, rename)) {
-                    @compileError(format_tag ++ " deserialize.alias '" ++ alias_name ++ "' duplicates deserialize.rename on " ++ @typeName(T) ++ "." ++ field.name);
+                    @compileError(
+                        format_tag ++ " deserialize.alias '" ++ alias_name ++
+                            "' duplicates deserialize.rename on " ++
+                            @typeName(T) ++ "." ++ field.name,
+                    );
                 }
             }
         }
         for (deserialize_options.alias) |alias_name| {
             if (std.mem.eql(u8, alias_name, field.name)) {
-                @compileError(format_tag ++ " deserialize.alias '" ++ alias_name ++ "' duplicates field name on " ++ @typeName(T) ++ "." ++ field.name);
+                @compileError(
+                    format_tag ++ " deserialize.alias '" ++ alias_name ++
+                        "' duplicates field name on " ++
+                        @typeName(T) ++ "." ++ field.name,
+                );
             }
         }
     }
@@ -349,26 +487,45 @@ pub fn validateFieldConfigs(comptime format: Format, comptime T: type) void {
 
             // Serialize names must not collide.
             if (std.mem.eql(u8, left_serialize_name, right_serialize_name)) {
-                @compileError(format_tag ++ " field key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
+                @compileError(
+                    format_tag ++ " field key conflict in " ++
+                        @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name,
+                );
             }
             // Deserialize names must not collide.
             if (std.mem.eql(u8, left_deserialize_name, right_deserialize_name)) {
-                @compileError(format_tag ++ " deserialize key conflict in " ++ @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name);
+                @compileError(
+                    format_tag ++ " deserialize key conflict in " ++
+                        @typeName(T) ++ ": " ++ left.name ++ " and " ++ right.name,
+                );
             }
             // Deserialize name of left must not collide with serialize name of right.
             if (!std.mem.eql(u8, left.name, right.name)) {
                 if (std.mem.eql(u8, left_deserialize_name, right_serialize_name)) {
-                    @compileError(format_tag ++ " key conflict in " ++ @typeName(T) ++ ": deserialize key of " ++ left.name ++ " collides with serialize key of " ++ right.name);
+                    @compileError(
+                        format_tag ++ " key conflict in " ++ @typeName(T) ++
+                            ": deserialize key of " ++ left.name ++
+                            " collides with serialize key of " ++ right.name,
+                    );
                 }
             }
 
             for (left_deserialize.alias) |left_alias| {
-                if (std.mem.eql(u8, left_alias, right_serialize_name) or std.mem.eql(u8, left_alias, right_deserialize_name)) {
-                    @compileError(format_tag ++ " alias conflict in " ++ @typeName(T) ++ ": alias '" ++ left_alias ++ "' conflicts with field " ++ right.name);
+                if (std.mem.eql(u8, left_alias, right_serialize_name) or
+                    std.mem.eql(u8, left_alias, right_deserialize_name))
+                {
+                    @compileError(
+                        format_tag ++ " alias conflict in " ++ @typeName(T) ++
+                            ": alias '" ++ left_alias ++ "' conflicts with field " ++ right.name,
+                    );
                 }
                 for (right_deserialize.alias) |right_alias| {
                     if (std.mem.eql(u8, left_alias, right_alias)) {
-                        @compileError(format_tag ++ " alias conflict in " ++ @typeName(T) ++ ": alias '" ++ left_alias ++ "' of " ++ left.name ++ " conflicts with alias of " ++ right.name);
+                        @compileError(
+                            format_tag ++ " alias conflict in " ++ @typeName(T) ++
+                                ": alias '" ++ left_alias ++ "' of " ++ left.name ++
+                                " conflicts with alias of " ++ right.name,
+                        );
                     }
                 }
             }
@@ -390,15 +547,24 @@ pub fn validateProtobufFieldNumbers(comptime T: type) void {
         if (options.protobuf) |protobuf_options| {
             if (protobuf_options.field_number) |number| {
                 if (number == 0) {
-                    @compileError("protobuf field_number must be non-zero on " ++ @typeName(T) ++ "." ++ field.name);
+                    @compileError(
+                        "protobuf field_number must be non-zero on " ++
+                            @typeName(T) ++ "." ++ field.name,
+                    );
                 }
                 if (number >= 19000) {
                     if (number <= 19999) {
-                        @compileError("protobuf field_number 19000-19999 is reserved on " ++ @typeName(T) ++ "." ++ field.name);
+                        @compileError(
+                            "protobuf field_number 19000-19999 is reserved on " ++
+                                @typeName(T) ++ "." ++ field.name,
+                        );
                     }
                 }
                 if (number > 536870911) {
-                    @compileError("protobuf field_number exceeds max 2^29-1 on " ++ @typeName(T) ++ "." ++ field.name);
+                    @compileError(
+                        "protobuf field_number exceeds max 2^29-1 on " ++
+                            @typeName(T) ++ "." ++ field.name,
+                    );
                 }
             }
         }
@@ -408,7 +574,11 @@ pub fn validateProtobufFieldNumbers(comptime T: type) void {
             if (right_index <= index) continue;
             const right_num = effectiveProtobufFieldNumber(T, right_index);
             if (left_num == right_num) {
-                @compileError("protobuf duplicate field_number " ++ std.fmt.comptimePrint("{d}", .{left_num}) ++ " on " ++ @typeName(T) ++ ": " ++ field.name ++ " and " ++ right.name);
+                @compileError(
+                    "protobuf duplicate field_number " ++
+                        std.fmt.comptimePrint("{d}", .{left_num}) ++ " on " ++
+                        @typeName(T) ++ ": " ++ field.name ++ " and " ++ right.name,
+                );
             }
         }
     }
@@ -451,7 +621,12 @@ pub fn writeEscapedString(writer: *std.Io.Writer, string: []const u8) !void {
 
 /// Returns true if `field_name` should be included in serialized output:
 /// not skipped, and not omitted when the value is null.
-pub fn shouldIncludeField(comptime format: Format, comptime T: type, comptime field_name: []const u8, field_value: anytype) bool {
+pub fn shouldIncludeField(
+    comptime format: Format,
+    comptime T: type,
+    comptime field_name: []const u8,
+    field_value: anytype,
+) bool {
     const config = serializeConfig(format, T, field_name);
     if (config.skip) return false;
     if (config.omit_null) {
@@ -460,6 +635,111 @@ pub fn shouldIncludeField(comptime format: Format, comptime T: type, comptime fi
         }
     }
     return true;
+}
+
+pub const UnescapeMode = enum { toml, yaml };
+
+/// Appends the unescaped content of `input` to `result`.
+/// Handles standard escapes (\n, \r, \t, \\, \") plus format-specific
+/// sequences: \uXXXX for TOML, \xXX for YAML.
+pub fn appendUnescaped(
+    result: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    comptime mode: UnescapeMode,
+) !void {
+    var index: usize = 0;
+    while (index < input.len) {
+        if (input[index] == '\\') {
+            if (index + 1 < input.len) {
+                switch (input[index + 1]) {
+                    '\\' => {
+                        try result.append(allocator, '\\');
+                        index += 2;
+                    },
+                    'n' => {
+                        try result.append(allocator, '\n');
+                        index += 2;
+                    },
+                    'r' => {
+                        try result.append(allocator, '\r');
+                        index += 2;
+                    },
+                    't' => {
+                        try result.append(allocator, '\t');
+                        index += 2;
+                    },
+                    '"' => {
+                        try result.append(allocator, '"');
+                        index += 2;
+                    },
+                    'u' => {
+                        if (mode == .toml) {
+                            if (index + 5 < input.len) {
+                                const hex = input[index + 2 .. index + 6];
+                                const code = std.fmt.parseInt(u21, hex, 16) catch {
+                                    try result.append(allocator, input[index]);
+                                    index += 1;
+                                    continue;
+                                };
+                                if (code < 0x80) {
+                                    try result.append(allocator, @intCast(code));
+                                } else {
+                                    var buffer: [4]u8 = undefined;
+                                    const len = std.unicode.utf8Encode(
+                                        code,
+                                        &buffer,
+                                    ) catch {
+                                        try result.append(allocator, input[index]);
+                                        index += 1;
+                                        continue;
+                                    };
+                                    try result.appendSlice(allocator, buffer[0..len]);
+                                }
+                                index += 6;
+                            } else {
+                                try result.append(allocator, input[index]);
+                                index += 1;
+                            }
+                        } else {
+                            try result.append(allocator, input[index]);
+                            index += 1;
+                        }
+                    },
+                    'x' => {
+                        if (mode == .yaml) {
+                            if (index + 3 < input.len) {
+                                const hex = input[index + 2 .. index + 4];
+                                const byte = std.fmt.parseInt(u8, hex, 16) catch {
+                                    try result.append(allocator, input[index]);
+                                    index += 1;
+                                    continue;
+                                };
+                                try result.append(allocator, byte);
+                                index += 4;
+                            } else {
+                                try result.append(allocator, input[index]);
+                                index += 1;
+                            }
+                        } else {
+                            try result.append(allocator, input[index]);
+                            index += 1;
+                        }
+                    },
+                    else => {
+                        try result.append(allocator, input[index]);
+                        index += 1;
+                    },
+                }
+            } else {
+                try result.append(allocator, input[index]);
+                index += 1;
+            }
+        } else {
+            try result.append(allocator, input[index]);
+            index += 1;
+        }
+    }
 }
 
 /// Fills in default/null values for fields not present in the deserialized input.

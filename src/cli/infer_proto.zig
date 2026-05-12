@@ -90,7 +90,11 @@ fn extractNameFromDecl(line: []const u8, keyword: []const u8) ?[]const u8 {
     return std.mem.trim(u8, after_keyword[0..end], " ");
 }
 
-fn parseMessage(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .scalar), first_line: []const u8) !ProtoDefinition {
+fn parseMessage(
+    allocator: std.mem.Allocator,
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    first_line: []const u8,
+) !ProtoDefinition {
     const name = extractNameFromDecl(first_line, "message") orelse "UnnamedMessage";
 
     var fields = std.ArrayList(FieldDefinition).empty;
@@ -147,7 +151,11 @@ fn parseMessage(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, 
     return .{ .message = .{ .name = name, .fields = fields, .nested = nested } };
 }
 
-fn parseEnum(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .scalar), first_line: []const u8) !ProtoDefinition {
+fn parseEnum(
+    allocator: std.mem.Allocator,
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    first_line: []const u8,
+) !ProtoDefinition {
     const name = extractNameFromDecl(first_line, "enum") orelse "UnnamedEnum";
 
     var values = std.ArrayList(EnumValueDefinition).empty;
@@ -248,7 +256,11 @@ fn parseEnumValueLine(allocator: std.mem.Allocator, line: []const u8) ?EnumValue
     };
 }
 
-fn mapProtoType(allocator: std.mem.Allocator, proto_type: []const u8, is_repeated: bool) ![]const u8 {
+fn mapProtoType(
+    allocator: std.mem.Allocator,
+    proto_type: []const u8,
+    is_repeated: bool,
+) ![]const u8 {
     const base = mapScalarType(proto_type) orelse proto_type;
     if (is_repeated) {
         return try std.fmt.allocPrint(allocator, "[]const {s}", .{base});
@@ -275,7 +287,11 @@ fn mapScalarType(proto_type: []const u8) ?[]const u8 {
     return null;
 }
 
-fn flattenDefinitions(allocator: std.mem.Allocator, definitions: []const ProtoDefinition, output: *std.ArrayList(ProtoDefinition)) !void {
+fn flattenDefinitions(
+    allocator: std.mem.Allocator,
+    definitions: []const ProtoDefinition,
+    output: *std.ArrayList(ProtoDefinition),
+) !void {
     for (definitions) |definition| {
         switch (definition) {
             .message => |message| {
@@ -294,13 +310,21 @@ fn flattenDefinitions(allocator: std.mem.Allocator, definitions: []const ProtoDe
     }
 }
 
-fn renderDefinitions(caller_alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, definitions: []const ProtoDefinition) ![]const u8 {
+fn renderDefinitions(
+    caller_alloc: std.mem.Allocator,
+    arena_alloc: std.mem.Allocator,
+    definitions: []const ProtoDefinition,
+) ![]const u8 {
     var output = std.ArrayList(u8).empty;
 
     for (definitions) |definition| {
         switch (definition) {
             .message => |message| try renderMessage(arena_alloc, &output, message),
-            .enum_definition => |enum_definition| try renderEnum(arena_alloc, &output, enum_definition),
+            .enum_definition => |enum_definition| try renderEnum(
+                arena_alloc,
+                &output,
+                enum_definition,
+            ),
         }
     }
 
@@ -312,14 +336,26 @@ fn renderDefinitions(caller_alloc: std.mem.Allocator, arena_alloc: std.mem.Alloc
     return try caller_alloc.dupe(u8, output.items);
 }
 
-fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), message: MessageDefinition) !void {
+fn renderMessage(
+    arena_alloc: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    message: MessageDefinition,
+) !void {
     const formatted_name = try common.formatName(arena_alloc, message.name);
-    const header = try std.fmt.allocPrint(arena_alloc, "const {s} = struct {{\n", .{formatted_name});
+    const header = try std.fmt.allocPrint(
+        arena_alloc,
+        "const {s} = struct {{\n",
+        .{formatted_name},
+    );
     try output.appendSlice(arena_alloc, header);
 
     for (message.fields.items) |field| {
         const formatted_field = try common.formatName(arena_alloc, field.name);
-        const line = try std.fmt.allocPrint(arena_alloc, "    {s}: {s},\n", .{ formatted_field, field.type_name });
+        const line = try std.fmt.allocPrint(
+            arena_alloc,
+            "    {s}: {s},\n",
+            .{ formatted_field, field.type_name },
+        );
         try output.appendSlice(arena_alloc, line);
     }
 
@@ -342,14 +378,26 @@ fn renderMessage(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), mes
     try output.appendSlice(arena_alloc, "};\n\n");
 }
 
-fn renderEnum(arena_alloc: std.mem.Allocator, output: *std.ArrayList(u8), enum_definition: EnumDefinition) !void {
+fn renderEnum(
+    arena_alloc: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    enum_definition: EnumDefinition,
+) !void {
     const formatted_name = try common.formatName(arena_alloc, enum_definition.name);
-    const header = try std.fmt.allocPrint(arena_alloc, "const {s} = enum(u32) {{\n", .{formatted_name});
+    const header = try std.fmt.allocPrint(
+        arena_alloc,
+        "const {s} = enum(u32) {{\n",
+        .{formatted_name},
+    );
     try output.appendSlice(arena_alloc, header);
 
     for (enum_definition.values.items) |value| {
         const formatted_value = try common.formatName(arena_alloc, value.name);
-        const line = try std.fmt.allocPrint(arena_alloc, "    {s} = {d},\n", .{ formatted_value, value.number });
+        const line = try std.fmt.allocPrint(
+            arena_alloc,
+            "    {s} = {d},\n",
+            .{ formatted_value, value.number },
+        );
         try output.appendSlice(arena_alloc, line);
     }
     try output.appendSlice(arena_alloc, "};\n\n");

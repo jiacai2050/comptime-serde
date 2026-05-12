@@ -122,8 +122,8 @@ fn skipSection(lines: *std.mem.SplitIterator(u8, .scalar)) void {
 }
 
 fn hasField(fields: []const FieldDefinition, name: []const u8) bool {
-    for (fields) |f| {
-        if (std.mem.eql(u8, f.name, name)) return true;
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return true;
     }
     return false;
 }

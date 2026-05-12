@@ -828,60 +828,7 @@ fn parseInlineString(allocator: std.mem.Allocator, input: []const u8) ![]const u
 fn unescapeString(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
     var result = std.ArrayList(u8).empty;
     defer result.deinit(allocator);
-
-    var index: usize = 0;
-    while (index < input.len) {
-        if (input[index] == '\\') {
-            if (index + 1 < input.len) {
-                switch (input[index + 1]) {
-                    '"' => {
-                        try result.append(allocator, '"');
-                        index += 2;
-                    },
-                    '\\' => {
-                        try result.append(allocator, '\\');
-                        index += 2;
-                    },
-                    'n' => {
-                        try result.append(allocator, '\n');
-                        index += 2;
-                    },
-                    'r' => {
-                        try result.append(allocator, '\r');
-                        index += 2;
-                    },
-                    't' => {
-                        try result.append(allocator, '\t');
-                        index += 2;
-                    },
-                    'x' => {
-                        if (index + 3 < input.len) {
-                            const byte = std.fmt.parseInt(u8, input[index + 2 .. index + 4], 16) catch {
-                                try result.append(allocator, input[index]);
-                                index += 1;
-                                continue;
-                            };
-                            try result.append(allocator, byte);
-                            index += 4;
-                        } else {
-                            try result.append(allocator, input[index]);
-                            index += 1;
-                        }
-                    },
-                    else => {
-                        try result.append(allocator, input[index]);
-                        index += 1;
-                    },
-                }
-            } else {
-                try result.append(allocator, input[index]);
-                index += 1;
-            }
-        } else {
-            try result.append(allocator, input[index]);
-            index += 1;
-        }
-    }
+    try common.appendUnescaped(&result, allocator, input, .yaml);
     return try result.toOwnedSlice(allocator);
 }
 

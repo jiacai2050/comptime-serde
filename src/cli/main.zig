@@ -38,7 +38,7 @@ const Options = struct {
         .version = .v,
     };
     pub const __messages__ = .{
-        .format = "Force format (json, toml, yaml, proto). Auto-detected from extension if omitted.",
+        .format = "Force format (json, toml, yaml, proto). Auto-detected from file extension.",
         .@"root-name" = "Name of the top-level struct.",
     };
 };

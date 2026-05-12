@@ -9,6 +9,13 @@ const WIRE_I64 = 1;
 const WIRE_LEN = 2;
 const WIRE_I32 = 5;
 
+comptime {
+    assert(WIRE_VARINT <= 7);
+    assert(WIRE_I64 <= 7);
+    assert(WIRE_LEN <= 7);
+    assert(WIRE_I32 <= 7);
+}
+
 /// Returns a comptime-generated protobuf serializer/deserializer for type `T`.
 /// Field numbers are 1-based struct field order.
 pub fn Serde(comptime T: type) type {
@@ -108,7 +115,12 @@ fn serializeField(
                         var packed_buffer = std.ArrayList(u8).empty;
                         defer packed_buffer.deinit(allocator);
                         for (value) |item| {
-                            try serializeScalar(allocator, &packed_buffer, pointer_type_info.child, item);
+                            try serializeScalar(
+                                allocator,
+                                &packed_buffer,
+                                pointer_type_info.child,
+                                item,
+                            );
                         }
                         try writeVarint(buffer, allocator, packed_buffer.items.len);
                         try buffer.appendSlice(allocator, packed_buffer.items);
@@ -289,7 +301,8 @@ fn deserializeFieldValue(
                 if (pointer_type_info.child == u8) {
                     const length = try readLength(input, position);
                     if (position.* + length > input.len) return error.UnexpectedToken;
-                    @field(result, field_name) = try allocator.dupe(u8, input[position.* .. position.* + length]);
+                    const end = position.* + length;
+                    @field(result, field_name) = try allocator.dupe(u8, input[position.*..end]);
                     position.* += length;
                     seen.* = true;
                 } else {
@@ -303,7 +316,8 @@ fn deserializeFieldValue(
                         const length_bytes = encodeVarint(&length_buffer, length);
                         try repeated_buffer.appendSlice(allocator, length_buffer[0..length_bytes]);
                     }
-                    try repeated_buffer.appendSlice(allocator, input[position.* .. position.* + length]);
+                    const end = position.* + length;
+                    try repeated_buffer.appendSlice(allocator, input[position.*..end]);
                     position.* += length;
                 }
             } else if (pointer_type_info.size == .one) {
@@ -550,8 +564,13 @@ fn enumToVarint(value: anytype) u64 {
 
 fn varintToEnum(comptime T: type, raw: u64) T {
     const enum_type_info = @typeInfo(T).@"enum";
-    const tag_value: enum_type_info.tag_type = if (comptime (@typeInfo(enum_type_info.tag_type).int.signedness == .signed))
-        @bitCast(@as(std.meta.Int(.unsigned, @typeInfo(enum_type_info.tag_type).int.bits), @truncate(raw)))
+    const Tag = enum_type_info.tag_type;
+    const is_signed = comptime (@typeInfo(Tag).int.signedness == .signed);
+    const tag_value: Tag = if (is_signed)
+        @bitCast(@as(
+            std.meta.Int(.unsigned, @typeInfo(Tag).int.bits),
+            @truncate(raw),
+        ))
     else
         @intCast(raw);
     return @enumFromInt(tag_value);
@@ -829,7 +848,8 @@ test "roundtrip: negative enum varint" {
     try serde.serialize(&writer, std.testing.allocator, original);
 
     // Standard protobuf: negative enum values are encoded as 10-byte varints.
-    try std.testing.expectEqual(@as(usize, 11), writer.buffered().len); // 1 byte tag + 10 bytes varint.
+    // 1 byte tag + 10 bytes varint.
+    try std.testing.expectEqual(@as(usize, 11), writer.buffered().len);
 
     var result = try serde.deserialize(std.testing.allocator, writer.buffered());
     defer result.deinit();
