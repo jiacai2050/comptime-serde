@@ -29,7 +29,27 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 
-    // 3. Build the CLI tool, which depends on the `zigcli` package.
+    // 3. Protobuf end-to-end tests (reads Go-generated payload files)
+    const pb_e2e_mod = b.createModule(.{
+        .root_source_file = b.path("tests/pb-e2e.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "comptime_serde", .module = mod },
+        },
+    });
+    const pb_e2e = b.addExecutable(.{
+        .name = "pb-e2e",
+        .root_module = pb_e2e_mod,
+    });
+    const run_pb_e2e = b.addRunArtifact(pb_e2e);
+    run_pb_e2e.setCwd(b.path("."));
+
+    const pb_e2e_step = b.step("pb-e2e", "Run protobuf end-to-end tests");
+    pb_e2e_step.dependOn(&run_pb_e2e.step);
+    test_step.dependOn(&run_pb_e2e.step);
+
+    // 4. Build the CLI tool, which depends on the `zigcli` package.
     if (b.lazyDependency("zigcli", .{
         .target = target,
         .optimize = optimize,
