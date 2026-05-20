@@ -47,7 +47,6 @@ pub fn build(b: *std.Build) void {
 
     const pb_e2e_step = b.step("pb-e2e", "Run protobuf end-to-end tests");
     pb_e2e_step.dependOn(&run_pb_e2e.step);
-    test_step.dependOn(&run_pb_e2e.step);
 
     // 4. Build the CLI tool, which depends on the `zigcli` package.
     if (b.lazyDependency("zigcli", .{
