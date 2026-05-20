@@ -22,6 +22,7 @@ const FieldDefinition = struct {
     type_name: []const u8,
     field_number: u32,
     is_repeated: bool,
+    is_zigzag: bool,
 };
 
 const EnumValueDefinition = struct {
@@ -226,6 +227,7 @@ fn parseFieldLine(allocator: std.mem.Allocator, line: []const u8) ?FieldDefiniti
         .type_name = zig_type,
         .field_number = field_number,
         .is_repeated = is_repeated,
+        .is_zigzag = std.mem.startsWith(u8, proto_type, "sint"),
     };
 }
 
@@ -366,11 +368,18 @@ fn renderMessage(
         try output.appendSlice(arena_alloc, "    pub const serde_fields = .{\n");
         for (message.fields.items) |field| {
             const formatted_field = try common.formatName(arena_alloc, field.name);
-            const entry = try std.fmt.allocPrint(
-                arena_alloc,
-                "        .{s} = .{{ .protobuf = .{{ .field_number = {d} }} }},\n",
-                .{ formatted_field, field.field_number },
-            );
+            const entry = if (field.is_zigzag)
+                try std.fmt.allocPrint(
+                    arena_alloc,
+                    "        .{s} = .{{ .protobuf = .{{ .field_number = {d}, .zigzag = true }} }},\n",
+                    .{ formatted_field, field.field_number },
+                )
+            else
+                try std.fmt.allocPrint(
+                    arena_alloc,
+                    "        .{s} = .{{ .protobuf = .{{ .field_number = {d} }} }},\n",
+                    .{ formatted_field, field.field_number },
+                );
             try output.appendSlice(arena_alloc, entry);
         }
         try output.appendSlice(arena_alloc, "    };\n");
@@ -719,10 +728,10 @@ test "all scalar types" {
         \\        .b = .{ .protobuf = .{ .field_number = 2 } },
         \\        .flag = .{ .protobuf = .{ .field_number = 3 } },
         \\        .i32 = .{ .protobuf = .{ .field_number = 4 } },
-        \\        .si32 = .{ .protobuf = .{ .field_number = 5 } },
+        \\        .si32 = .{ .protobuf = .{ .field_number = 5, .zigzag = true } },
         \\        .sf32 = .{ .protobuf = .{ .field_number = 6 } },
         \\        .i64 = .{ .protobuf = .{ .field_number = 7 } },
-        \\        .si64 = .{ .protobuf = .{ .field_number = 8 } },
+        \\        .si64 = .{ .protobuf = .{ .field_number = 8, .zigzag = true } },
         \\        .sf64 = .{ .protobuf = .{ .field_number = 9 } },
         \\        .u32 = .{ .protobuf = .{ .field_number = 10 } },
         \\        .f32_ = .{ .protobuf = .{ .field_number = 11 } },

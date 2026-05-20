@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package testdata;
+
+option go_package = "comptime-serde/tests";
+
+// Matches Zig: struct { name: []const u8, port: u32, flag: bool }
+message SimpleMessage {
+    string name = 1;
+    uint32 port = 2;
+    bool flag = 3;
+}
+
+// Matches Zig: struct { host: []const u8, port: u32 }
+message Server {
+    string host = 1;
+    uint32 port = 2;
+}
+
+// Matches Zig: struct { name: []const u8, server: Server }
+message NestedMessage {
+    string name = 1;
+    Server server = 2;
+}
+
+// Matches Zig: struct { scores: []const u32 }
+message PackedScalars {
+    repeated uint32 scores = 1;
+}
+
+// Matches Zig: struct { servers: []const Server }
+message RepeatedMessage {
+    repeated Server servers = 1;
+}
+
+// Matches Zig: enum(u32) { active = 0, inactive = 1 }
+enum Status {
+    active = 0;
+    inactive = 1;
+}
+
+// Matches Zig: struct { status: Status }
+message EnumMessage {
+    Status status = 1;
+}
+
+// Zig signed ints use ZigZag encoding, so use sint32/sint64.
+// Matches Zig: struct { value: i32 }
+message SignedMessage {
+    sint32 value = 1;
+}
+
+// Matches Zig: struct { f: f32, d: f64 }
+message FloatMessage {
+    float f = 1;
+    double d = 2;
+}
+
+// Matches Zig: struct { name: []const u8, tag: ?[]const u8 = null }
+message OptionalStringMessage {
+    string name = 1;
+    optional string tag = 2;
+}
+
+// Matches Zig: struct { name: []const u8, server: ?Server = null }
+message OptionalStructMessage {
+    string name = 1;
+    optional Server server = 2;
+}
