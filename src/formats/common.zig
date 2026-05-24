@@ -60,6 +60,9 @@ pub const FormatFieldOptions = struct {
 pub const ProtobufFieldOptions = struct {
     /// Explicit proto field number instead of relying on declaration order (1-based).
     field_number: ?u32 = null,
+    /// Use ZigZag encoding for signed integers (sint32/sint64 semantics).
+    /// Default is plain varint (int32/int64 semantics).
+    zigzag: bool = false,
 };
 
 /// Aggregated field options keyed by format, populated from `T.serde_fields`.
@@ -289,6 +292,8 @@ fn parseProtobufFieldOptions(
     var options: ProtobufFieldOptions = .{};
     if (@hasField(metadata_type, "field_number"))
         options.field_number = @field(protobuf_metadata, "field_number");
+    if (@hasField(metadata_type, "zigzag"))
+        options.zigzag = @field(protobuf_metadata, "zigzag");
     return options;
 }
 
@@ -567,6 +572,16 @@ pub fn validateProtobufFieldNumbers(comptime T: type) void {
                     );
                 }
             }
+            if (protobuf_options.zigzag) {
+                const ft = @typeInfo(field.type);
+                const is_signed_int = ft == .int and ft.int.signedness == .signed;
+                if (!is_signed_int) {
+                    @compileError(
+                        "protobuf zigzag option requires a signed integer field, but " ++
+                            @typeName(T) ++ "." ++ field.name ++ " is " ++ @typeName(field.type),
+                    );
+                }
+            }
         }
         // Check for duplicate field numbers.
         const left_num = effectiveProtobufFieldNumber(T, index);
@@ -595,6 +610,17 @@ pub fn effectiveProtobufFieldNumber(comptime T: type, comptime index: usize) u32
         return protobuf_options.field_number orelse @intCast(index + 1);
     }
     return @intCast(index + 1);
+}
+
+/// Returns whether the field at `index` in `T` uses zigzag encoding.
+pub fn protobufFieldZigzag(comptime T: type, comptime index: usize) bool {
+    const struct_info = @typeInfo(T).@"struct";
+    const field = struct_info.fields[index];
+    const options = fieldOptions(T, field.name);
+    if (options.protobuf) |protobuf_options| {
+        return protobuf_options.zigzag;
+    }
+    return false;
 }
 
 /// Writes `string` as a double-quoted JSON/TOML string with standard escapes.

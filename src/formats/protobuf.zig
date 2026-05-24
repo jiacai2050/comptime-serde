@@ -60,7 +60,15 @@ fn serializeMessage(
     inline for (struct_info.fields, 0..) |field, index| {
         const field_num = common.effectiveProtobufFieldNumber(T, index);
         const field_value = @field(value, field.name);
-        try serializeField(allocator, buffer, field.type, field_num, field_value);
+        const zigzag = comptime common.protobufFieldZigzag(T, index);
+        try serializeField(
+            allocator,
+            buffer,
+            field.type,
+            field_num,
+            zigzag,
+            field_value,
+        );
     }
 }
 
@@ -69,6 +77,7 @@ fn serializeField(
     buffer: *std.ArrayList(u8),
     comptime T: type,
     field_num: u32,
+    comptime zigzag: bool,
     value: anytype,
 ) !void {
     assert(field_num > 0);
@@ -81,7 +90,11 @@ fn serializeField(
         },
         .int => {
             try writeTag(buffer, allocator, field_num, WIRE_VARINT);
-            try writeVarint(buffer, allocator, value);
+            if (comptime zigzag and @typeInfo(T).int.signedness == .signed) {
+                try writeVarint(buffer, allocator, zigzagEncode(value));
+            } else {
+                try writeVarint(buffer, allocator, value);
+            }
         },
         .float => |float_type_info| {
             if (float_type_info.bits == 32) {
@@ -119,6 +132,7 @@ fn serializeField(
                                 allocator,
                                 &packed_buffer,
                                 pointer_type_info.child,
+                                zigzag,
                                 item,
                             );
                         }
@@ -157,7 +171,14 @@ fn serializeField(
         },
         .optional => {
             if (value) |present| {
-                try serializeField(allocator, buffer, type_info.optional.child, field_num, present);
+                try serializeField(
+                    allocator,
+                    buffer,
+                    type_info.optional.child,
+                    field_num,
+                    zigzag,
+                    present,
+                );
             }
         },
         else => @compileError("unsupported protobuf type: " ++ @typeName(T)),
@@ -168,12 +189,19 @@ fn serializeScalar(
     allocator: std.mem.Allocator,
     buffer: *std.ArrayList(u8),
     comptime T: type,
+    comptime zigzag: bool,
     value: anytype,
 ) !void {
     const type_info = @typeInfo(T);
     switch (type_info) {
         .bool => try writeVarint(buffer, allocator, @intFromBool(value)),
-        .int => try writeVarint(buffer, allocator, value),
+        .int => {
+            if (comptime zigzag and @typeInfo(T).int.signedness == .signed) {
+                try writeVarint(buffer, allocator, zigzagEncode(value));
+            } else {
+                try writeVarint(buffer, allocator, value);
+            }
+        },
         .float => |float_type_info| {
             if (float_type_info.bits == 32) {
                 try writeFixed32(buffer, allocator, @bitCast(value));
@@ -224,6 +252,7 @@ fn deserializeMessage(
                 try deserializeFieldValue(
                     T,
                     field.type,
+                    comptime common.protobufFieldZigzag(T, index),
                     allocator,
                     input,
                     &position,
@@ -265,6 +294,7 @@ fn deserializeMessage(
                 } else {
                     @field(result, field.name) = try finalizePackedScalars(
                         child_type,
+                        comptime common.protobufFieldZigzag(T, index),
                         allocator,
                         repeated_buffers[index].items,
                     );
@@ -281,6 +311,7 @@ fn deserializeMessage(
 fn deserializeFieldValue(
     comptime Parent: type,
     comptime T: type,
+    comptime zigzag: bool,
     allocator: std.mem.Allocator,
     input: []const u8,
     position: *usize,
@@ -293,7 +324,7 @@ fn deserializeFieldValue(
     const type_info = @typeInfo(T);
     switch (type_info) {
         .bool, .int, .float, .@"enum" => {
-            @field(result, field_name) = try deserializeScalar(T, input, position);
+            @field(result, field_name) = try deserializeScalar(T, zigzag, input, position);
             seen.* = true;
         },
         .pointer => |pointer_type_info| {
@@ -351,20 +382,20 @@ fn deserializeFieldValue(
             position.* += length;
             seen.* = true;
         },
-        .optional => {
-            // Decode the inner type.
-            const inner_type = type_info.optional.child;
-            const inner_type_info = @typeInfo(inner_type);
-            switch (inner_type_info) {
-                .bool, .int, .float, .@"enum" => {
-                    @field(result, field_name) = try deserializeScalar(inner_type, input, position);
-                    seen.* = true;
-                },
-                else => {
-                    @field(result, field_name) = null;
-                    seen.* = true;
-                },
-            }
+        .optional => |optional_info| {
+            try deserializeFieldValue(
+                Parent,
+                optional_info.child,
+                zigzag,
+                allocator,
+                input,
+                position,
+                wire_type,
+                result,
+                field_name,
+                seen,
+                repeated_buffer,
+            );
         },
         else => {
             try skipField(input, position, wire_type);
@@ -393,6 +424,7 @@ fn finalizeRepeatedMessages(
 
 fn finalizePackedScalars(
     comptime T: type,
+    comptime zigzag: bool,
     allocator: std.mem.Allocator,
     data: []const u8,
 ) ![]const T {
@@ -401,22 +433,30 @@ fn finalizePackedScalars(
 
     var position: usize = 0;
     while (position < data.len) {
-        try list.append(allocator, try deserializeScalar(T, data, &position));
+        try list.append(allocator, try deserializeScalar(T, zigzag, data, &position));
     }
     return try list.toOwnedSlice(allocator);
 }
 
 fn skipField(input: []const u8, position: *usize, wire_type: u3) !void {
     switch (wire_type) {
-        WIRE_VARINT => _ = readVarint(input, position),
-        WIRE_I64 => position.* = @min(position.* + 8, input.len),
-        WIRE_LEN => {
-            if (readVarint(input, position)) |length_value| {
-                const length: usize = @intCast(length_value);
-                position.* = @min(position.* + length, input.len);
-            }
+        WIRE_VARINT => {
+            if (readVarint(input, position) == null) return error.UnexpectedToken;
         },
-        WIRE_I32 => position.* = @min(position.* + 4, input.len),
+        WIRE_I64 => {
+            if (position.* + 8 > input.len) return error.UnexpectedToken;
+            position.* += 8;
+        },
+        WIRE_LEN => {
+            const length_value = readVarint(input, position) orelse return error.UnexpectedToken;
+            const length = std.math.cast(usize, length_value) orelse return error.UnexpectedToken;
+            if (position.* + length > input.len) return error.UnexpectedToken;
+            position.* += length;
+        },
+        WIRE_I32 => {
+            if (position.* + 4 > input.len) return error.UnexpectedToken;
+            position.* += 4;
+        },
         else => return error.UnsupportedWireType,
     }
 }
@@ -442,7 +482,7 @@ fn writeVarint(
     const T = @TypeOf(value);
     var remaining: u64 = undefined;
     if (comptime @typeInfo(T) == .int and @typeInfo(T).int.signedness == .signed) {
-        remaining = zigzagEncode(value);
+        remaining = @bitCast(@as(i64, @intCast(value)));
     } else {
         remaining = @intCast(value);
     }
@@ -499,7 +539,12 @@ fn readVarint(input: []const u8, position: *usize) ?u64 {
     return null;
 }
 
-fn deserializeScalar(comptime T: type, input: []const u8, position: *usize) !T {
+fn deserializeScalar(
+    comptime T: type,
+    comptime zigzag: bool,
+    input: []const u8,
+    position: *usize,
+) !T {
     const type_info = @typeInfo(T);
     switch (type_info) {
         .bool => {
@@ -508,8 +553,10 @@ fn deserializeScalar(comptime T: type, input: []const u8, position: *usize) !T {
         },
         .int => |int_type_info| {
             const raw = readVarint(input, position) orelse return error.UnexpectedToken;
-            if (int_type_info.signedness == .signed) {
+            if (comptime zigzag and int_type_info.signedness == .signed) {
                 return @intCast(zigzagDecode(raw));
+            } else if (int_type_info.signedness == .signed) {
+                return @truncate(@as(i64, @bitCast(raw)));
             } else {
                 return @intCast(raw);
             }
@@ -691,7 +738,10 @@ test "roundtrip: enum" {
 }
 
 test "roundtrip: signed integers (zigzag)" {
-    const Data = struct { value: i32 };
+    const Data = struct {
+        value: i32,
+        pub const serde_fields = .{ .value = .{ .protobuf = .{ .zigzag = true } } };
+    };
     const serde = Serde(Data);
     const original = Data{ .value = -42 };
 
@@ -751,6 +801,73 @@ test "roundtrip: optional field null" {
 
     try std.testing.expectEqualStrings("test", result.value.name);
     try std.testing.expectEqual(@as(?u32, null), result.value.port);
+}
+
+test "roundtrip: optional string field" {
+    const Data = struct { name: []const u8, tag: ?[]const u8 = null };
+    const serde = Serde(Data);
+    const original = Data{ .name = "test", .tag = "hello" };
+
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try serde.serialize(&writer, std.testing.allocator, original);
+
+    var result = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer result.deinit();
+
+    try std.testing.expectEqualStrings("test", result.value.name);
+    try std.testing.expectEqualStrings("hello", result.value.tag.?);
+}
+
+test "roundtrip: optional string field null" {
+    const Data = struct { name: []const u8, tag: ?[]const u8 = null };
+    const serde = Serde(Data);
+    const original = Data{ .name = "test", .tag = null };
+
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try serde.serialize(&writer, std.testing.allocator, original);
+
+    var result = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer result.deinit();
+
+    try std.testing.expectEqualStrings("test", result.value.name);
+    try std.testing.expectEqual(null, result.value.tag);
+}
+
+test "roundtrip: optional struct field" {
+    const Inner = struct { host: []const u8, port: u32 };
+    const Data = struct { name: []const u8, server: ?Inner = null };
+    const serde = Serde(Data);
+    const original = Data{ .name = "app", .server = .{ .host = "localhost", .port = 8080 } };
+
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try serde.serialize(&writer, std.testing.allocator, original);
+
+    var result = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer result.deinit();
+
+    try std.testing.expectEqualStrings("app", result.value.name);
+    try std.testing.expectEqualStrings("localhost", result.value.server.?.host);
+    try std.testing.expectEqual(@as(u32, 8080), result.value.server.?.port);
+}
+
+test "roundtrip: optional struct field null" {
+    const Inner = struct { host: []const u8, port: u32 };
+    const Data = struct { name: []const u8, server: ?Inner = null };
+    const serde = Serde(Data);
+    const original = Data{ .name = "app", .server = null };
+
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try serde.serialize(&writer, std.testing.allocator, original);
+
+    var result = try serde.deserialize(std.testing.allocator, writer.buffered());
+    defer result.deinit();
+
+    try std.testing.expectEqualStrings("app", result.value.name);
+    try std.testing.expectEqual(null, result.value.server);
 }
 
 test "error: empty input missing fields" {
@@ -858,7 +975,10 @@ test "roundtrip: negative enum varint" {
 }
 
 test "roundtrip: i8 zigzag" {
-    const Data = struct { val: i8 };
+    const Data = struct {
+        val: i8,
+        pub const serde_fields = .{ .val = .{ .protobuf = .{ .zigzag = true } } };
+    };
     const serde = Serde(Data);
     const original = Data{ .val = -5 };
 
@@ -902,9 +1022,8 @@ test "roundtrip: negative i32 varint" {
     var writer = std.Io.Writer.fixed(&buffer);
     try serde.serialize(&writer, std.testing.allocator, original);
 
-    // Protobuf negative numbers using ZigZag encoding take fewer bytes.
-    // -1 becomes 1 after ZigZag, so 1 byte tag + 1 byte varint = 2 bytes.
-    try std.testing.expectEqual(@as(usize, 2), writer.buffered().len);
+    // Plain varint: -1 sign-extends to 10 bytes + 1 byte tag = 11 bytes.
+    try std.testing.expectEqual(@as(usize, 11), writer.buffered().len);
 
     var result = try serde.deserialize(std.testing.allocator, writer.buffered());
     defer result.deinit();

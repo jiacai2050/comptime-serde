@@ -8,6 +8,7 @@ lint:
 
 test:
 	zig build test --test-timeout 5s --summary all $(ARGS)
+	tests/pb-e2e.sh
 
 docs:
 	zig build docs
