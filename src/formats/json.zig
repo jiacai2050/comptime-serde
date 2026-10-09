@@ -66,15 +66,15 @@ pub fn Serde(comptime T: type) type {
                 .@"struct" => |struct_type_info| {
                     try writer.writeByte('{');
                     var first = true;
-                    inline for (struct_type_info.fields) |field| {
-                        const field_value = @field(value, field.name);
-                        if (common.shouldIncludeField(.json, T, field.name, field_value)) {
+                    inline for (struct_type_info.field_names, struct_type_info.field_types) |field_name, field_type| {
+                        const field_value = @field(value, field_name);
+                        if (common.shouldIncludeField(.json, T, field_name, field_value)) {
                             if (!first) try writer.writeByte(',');
                             first = false;
-                            const key = common.serializedFieldName(.json, T, field.name);
+                            const key = common.serializedFieldName(.json, T, field_name);
                             try common.writeEscapedString(writer, key);
                             try writer.writeByte(':');
-                            const FieldSerializer = Serde(field.type);
+                            const FieldSerializer = Serde(field_type);
                             try FieldSerializer.serialize(writer, field_value);
                         }
                     }
@@ -184,7 +184,7 @@ pub fn Serde(comptime T: type) type {
                 .@"struct" => |struct_type_info| {
                     if (try scanner.next() != .object_begin) return error.UnexpectedToken;
                     var result: T = undefined;
-                    var fields_seen = [_]bool{false} ** struct_type_info.fields.len;
+                    var fields_seen: [struct_type_info.field_names.len]bool = @splat(false);
                     while (true) {
                         const key = switch (try scanner.nextAlloc(allocator, .alloc_if_needed)) {
                             .string => |string| string,
@@ -192,17 +192,17 @@ pub fn Serde(comptime T: type) type {
                             .object_end => break,
                             else => return error.UnexpectedToken,
                         };
-                        inline for (struct_type_info.fields, 0..) |field, index| {
-                            if (common.matchesInputKey(.json, T, field.name, key)) {
-                                const config = common.deserializeConfig(.json, T, field.name);
+                        inline for (struct_type_info.field_names, struct_type_info.field_types, 0..) |field_name, field_type, index| {
+                            if (common.matchesInputKey(.json, T, field_name, key)) {
+                                const config = common.deserializeConfig(.json, T, field_name);
                                 if (config.skip) {
                                     try scanner.skipValue();
                                     break;
                                 }
                                 if (fields_seen[index]) return error.DuplicateField;
-                                const FieldParser = Serde(field.type);
+                                const FieldParser = Serde(field_type);
                                 const parsed = try FieldParser.parseValue(scanner, allocator);
-                                @field(result, field.name) = parsed;
+                                @field(result, field_name) = parsed;
                                 fields_seen[index] = true;
                                 break;
                             }
@@ -219,9 +219,9 @@ pub fn Serde(comptime T: type) type {
                         .allocated_string => |enum_string| enum_string,
                         else => return error.UnexpectedToken,
                     };
-                    inline for (enum_type_info.fields) |field| {
-                        if (std.mem.eql(u8, field.name, string)) {
-                            return @enumFromInt(field.value);
+                    inline for (enum_type_info.field_names, enum_type_info.field_values) |field_name, field_val| {
+                        if (std.mem.eql(u8, field_name, string)) {
+                            return @fromBackingInt(@intCast(field_val));
                         }
                     }
                     return error.UnexpectedToken;

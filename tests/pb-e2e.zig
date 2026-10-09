@@ -112,20 +112,20 @@ fn initValue(comptime T: type, comptime source: anytype) T {
     const info = @typeInfo(T);
     if (info != .@"struct") return source;
     var result: T = undefined;
-    inline for (info.@"struct".fields) |field| {
-        const src_val = @field(source, field.name);
-        const field_info = @typeInfo(field.type);
+    inline for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
+        const src_val = @field(source, field_name);
+        const field_info = @typeInfo(field_type);
         if (field_info == .@"struct") {
-            @field(result, field.name) = initValue(field.type, src_val);
+            @field(result, field_name) = initValue(field_type, src_val);
         } else if (field_info == .optional) {
             const child = field_info.optional.child;
             if (@typeInfo(child) == .@"struct") {
-                @field(result, field.name) = initValue(child, src_val);
+                @field(result, field_name) = initValue(child, src_val);
             } else {
-                @field(result, field.name) = src_val;
+                @field(result, field_name) = src_val;
             }
         } else {
-            @field(result, field.name) = src_val;
+            @field(result, field_name) = src_val;
         }
     }
     return result;
@@ -134,9 +134,9 @@ fn initValue(comptime T: type, comptime source: anytype) T {
 /// Recursively compares struct fields between expected and actual values.
 fn expectEqual(expected: anytype, actual: anytype) !void {
     const E = @TypeOf(expected);
-    inline for (@typeInfo(E).@"struct".fields) |field| {
-        const exp = @field(expected, field.name);
-        const act = @field(actual, field.name);
+    inline for (@typeInfo(E).@"struct".field_names) |field_name| {
+        const exp = @field(expected, field_name);
+        const act = @field(actual, field_name);
         try expectFieldEqual(exp, act);
     }
 }

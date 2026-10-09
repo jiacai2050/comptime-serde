@@ -2,15 +2,15 @@
 
 ## Build, test, and lint
 
-- **Required Zig version:** `0.16.0` (the codebase uses Zig 0.16 APIs like `std.Io.Writer`).
+- **Required Zig version:** `0.17.0` (the codebase uses Zig 0.17 APIs like `std.Io.Writer`).
 - **Run all tests:** `zig build test`
 - **Run tests in release mode:** `zig build test -Doptimize=ReleaseFast`
-- **Format source:** `zig fmt src/`
-- **Check formatting:** `zig fmt --check src/`
+- **Format source:** `zig fmt src/ build.zig tests/`
+- **Check formatting:** `zig fmt --check src/ build.zig tests/`
 
 Convenience `make` targets are also used in CI:
 
-- `make lint` → `zig fmt --check .`
+- `make lint` → `zig fmt --check src/ build.zig tests/`
 - `make test` → `zig build test --test-timeout 5s --summary all`
 
 Single-test workflow:
@@ -31,7 +31,7 @@ Single-test workflow:
   - `yaml.zig`: indentation-driven parser with mapping/sequence handling and block scalar support.
   - `protobuf.zig`: proto3-style wire encoding; struct field order maps to field numbers (1-based), repeated scalars are packed, repeated structs are length-delimited.
 - **CLI tool (`serde-gen`):** `src/cli/main.zig` routes to `infer_json.zig`, `infer_toml.zig`, or `infer_yaml.zig`; each infers struct defs from sample data and renders Zig code.
-- **Build graph:** `build.zig` always builds library tests; CLI build/tests are wired through lazy dependency `zigcli` and share the same `test` step when dependency is available.
+- **Build graph:** `build.zig` always builds library tests; CLI build/tests are wired through lazy dependency `zigcli` when `-Dbuild-cli=true` (defaults to `false`) and share the same `test` step.
 
 ## Key conventions specific to this repository
 

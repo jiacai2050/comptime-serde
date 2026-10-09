@@ -57,14 +57,14 @@ fn serializeMessage(
     const T = @TypeOf(value);
     const struct_info = @typeInfo(T).@"struct";
 
-    inline for (struct_info.fields, 0..) |field, index| {
+    inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
         const field_num = common.effectiveProtobufFieldNumber(T, index);
-        const field_value = @field(value, field.name);
+        const field_value = @field(value, field_name);
         const zigzag = comptime common.protobufFieldZigzag(T, index);
         try serializeField(
             allocator,
             buffer,
-            field.type,
+            field_type,
             field_num,
             zigzag,
             field_value,
@@ -225,14 +225,14 @@ fn deserializeMessage(
 ) !T {
     const struct_info = @typeInfo(T).@"struct";
     var result: T = undefined;
-    var fields_seen = [_]bool{false} ** struct_info.fields.len;
+    var fields_seen: [struct_info.field_names.len]bool = @splat(false);
 
     // Temporary storage for repeated fields.
-    var repeated_buffers: [struct_info.fields.len]std.ArrayList(u8) = undefined;
-    inline for (0..struct_info.fields.len) |index| {
+    var repeated_buffers: [struct_info.field_names.len]std.ArrayList(u8) = undefined;
+    inline for (0..struct_info.field_names.len) |index| {
         repeated_buffers[index] = std.ArrayList(u8).empty;
     }
-    defer inline for (0..struct_info.fields.len) |index| {
+    defer inline for (0..struct_info.field_names.len) |index| {
         repeated_buffers[index].deinit(allocator);
     };
 
@@ -245,20 +245,20 @@ fn deserializeMessage(
         if (field_num == 0) return error.UnexpectedToken;
 
         var matched = false;
-        inline for (struct_info.fields, 0..) |field, index| {
+        inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
             const expected_num = common.effectiveProtobufFieldNumber(T, index);
             if (field_num == expected_num) {
                 matched = true;
                 try deserializeFieldValue(
                     T,
-                    field.type,
+                    field_type,
                     comptime common.protobufFieldZigzag(T, index),
                     allocator,
                     input,
                     &position,
                     wire_type,
                     &result,
-                    field.name,
+                    field_name,
                     &fields_seen[index],
                     &repeated_buffers[index],
                 );
@@ -271,8 +271,8 @@ fn deserializeMessage(
     }
 
     // Finalize repeated fields and apply defaults.
-    inline for (struct_info.fields, 0..) |field, index| {
-        const field_info = @typeInfo(field.type);
+    inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+        const field_info = @typeInfo(field_type);
         const is_repeated = if (field_info == .pointer)
             if (field_info.pointer.size == .slice)
                 field_info.pointer.child != u8
@@ -286,13 +286,13 @@ fn deserializeMessage(
                 const child_type = field_info.pointer.child;
                 const child_type_info = @typeInfo(child_type);
                 if (child_type_info == .@"struct") {
-                    @field(result, field.name) = try finalizeRepeatedMessages(
+                    @field(result, field_name) = try finalizeRepeatedMessages(
                         child_type,
                         allocator,
                         repeated_buffers[index].items,
                     );
                 } else {
-                    @field(result, field.name) = try finalizePackedScalars(
+                    @field(result, field_name) = try finalizePackedScalars(
                         child_type,
                         comptime common.protobufFieldZigzag(T, index),
                         allocator,
@@ -600,7 +600,7 @@ fn readLength(input: []const u8, position: *usize) !usize {
 }
 
 fn enumToVarint(value: anytype) u64 {
-    const tag_value = @intFromEnum(value);
+    const tag_value = @backingInt(value);
     // Must sign-extend to 64-bit if signed, then bitcast to unsigned 64-bit
     // to produce the standard 10-byte protobuf varint for negative enums.
     return if (comptime @typeInfo(@TypeOf(tag_value)).int.signedness == .signed)
@@ -615,25 +615,25 @@ fn varintToEnum(comptime T: type, raw: u64) T {
     const is_signed = comptime (@typeInfo(Tag).int.signedness == .signed);
     const tag_value: Tag = if (is_signed)
         @bitCast(@as(
-            std.meta.Int(.unsigned, @typeInfo(Tag).int.bits),
+            @Int(.unsigned, @typeInfo(Tag).int.bits),
             @truncate(raw),
         ))
     else
         @intCast(raw);
-    return @enumFromInt(tag_value);
+    return @fromBackingInt(@intCast(tag_value));
 }
 
 // ==================== ZigZag Encoding ====================
 
-fn zigzagEncode(value: anytype) std.meta.Int(.unsigned, @typeInfo(@TypeOf(value)).int.bits) {
+fn zigzagEncode(value: anytype) @Int(.unsigned, @typeInfo(@TypeOf(value)).int.bits) {
     const T = @TypeOf(value);
-    const UnsignedType = std.meta.Int(.unsigned, @typeInfo(T).int.bits);
+    const UnsignedType = @Int(.unsigned, @typeInfo(T).int.bits);
     const value_unsigned: UnsignedType = @bitCast(value);
     const shift = @typeInfo(T).int.bits - 1;
     return (value_unsigned << 1) ^ @as(UnsignedType, @bitCast(value >> @intCast(shift)));
 }
 
-fn zigzagDecode(value: anytype) std.meta.Int(.signed, @typeInfo(@TypeOf(value)).int.bits) {
+fn zigzagDecode(value: anytype) @Int(.signed, @typeInfo(@TypeOf(value)).int.bits) {
     const UnsignedType = @TypeOf(value);
     return @bitCast((value >> 1) ^ (-%@as(UnsignedType, value & 1)));
 }

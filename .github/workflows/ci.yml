@@ -40,5 +40,5 @@ jobs:
       - name: serde-gen tests
         if: matrix.os != 'windows-latest'
         run: |
-          zig build
+          zig build -Dbuild-cli
           ./tests/test-serde-gen.sh

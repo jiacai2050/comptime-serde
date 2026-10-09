@@ -1,6 +1,6 @@
 # comptime-serde
 
-![](https://img.shields.io/badge/zig%20version-0.16.0-F7A41D.svg)
+![](https://img.shields.io/badge/zig%20version-0.17.0-F7A41D.svg)
 [![](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml/badge.svg)](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml)
 
 > Compile-time serialization and deserialization for Zig.

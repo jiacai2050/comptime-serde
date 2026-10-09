@@ -1,8 +1,9 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const build_cli = b.option(bool, "build-cli", "Build the serde-gen CLI tool") orelse false;
 
     const mod = b.addModule("comptime_serde", .{
         .root_source_file = b.path("src/root.zig"),
@@ -49,10 +50,11 @@ pub fn build(b: *std.Build) void {
     pb_e2e_step.dependOn(&run_pb_e2e.step);
 
     // 4. Build the CLI tool, which depends on the `zigcli` package.
-    if (b.lazyDependency("zigcli", .{
-        .target = target,
-        .optimize = optimize,
-    })) |zigcli_dep| {
+    if (build_cli) {
+        const zigcli_dep = try b.dependencyLazy("zigcli", .{
+            .target = target,
+            .optimize = optimize,
+        });
         const zigcli_mod = zigcli_dep.module("zigcli");
 
         const build_options = b.addOptions();
@@ -84,7 +86,7 @@ pub fn build(b: *std.Build) void {
 
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| run_cmd.addArgs(args);
+        run_cmd.addPassthruArgs();
         const run_step = b.step("run", "Run serde-gen");
         run_step.dependOn(&run_cmd.step);
 

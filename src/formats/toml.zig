@@ -66,11 +66,11 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
     switch (type_info) {
         .@"struct" => |struct_info| {
             // Pass 1: write key-value pairs (primitives, strings, inline arrays).
-            inline for (struct_info.fields) |field| {
-                const field_key = common.serializedFieldName(.toml, T, field.name);
-                const field_value = @field(value, field.name);
-                if (common.shouldIncludeField(.toml, T, field.name, field_value)) {
-                    const field_type_info = @typeInfo(field.type);
+            inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
+                const field_key = common.serializedFieldName(.toml, T, field_name);
+                const field_value = @field(value, field_name);
+                if (common.shouldIncludeField(.toml, T, field_name, field_value)) {
+                    const field_type_info = @typeInfo(field_type);
                     switch (field_type_info) {
                         .@"struct" => {}, // Handled in pass 2.
                         .optional => |optional_type_info| {
@@ -104,11 +104,11 @@ fn writeTable(writer: *std.Io.Writer, value: anytype) !void {
                 }
             }
             // Pass 2: write [table] and [[array]] sections.
-            inline for (struct_info.fields) |field| {
-                const field_key = common.serializedFieldName(.toml, T, field.name);
-                const field_value = @field(value, field.name);
-                if (common.shouldIncludeField(.toml, T, field.name, field_value)) {
-                    const field_type_info = @typeInfo(field.type);
+            inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
+                const field_key = common.serializedFieldName(.toml, T, field_name);
+                const field_value = @field(value, field_name);
+                if (common.shouldIncludeField(.toml, T, field_name, field_value)) {
+                    const field_type_info = @typeInfo(field_type);
                     switch (field_type_info) {
                         .@"struct" => {
                             try writer.print("[{s}]\n", .{field_key});
@@ -271,7 +271,7 @@ fn parseStructFull(
     switch (type_info) {
         .@"struct" => |struct_info| {
             var result: T = undefined;
-            var fields_seen = [_]bool{false} ** struct_info.fields.len;
+            var fields_seen: [struct_info.field_names.len]bool = @splat(false);
 
             // Phase 1: parse key-value lines at the current level.
             try parseKvLines(T, &result, &fields_seen, parser);
@@ -342,7 +342,7 @@ fn parseStructFull(
 fn parseKvLines(
     comptime T: type,
     result: *T,
-    fields_seen: *[std.meta.fields(T).len]bool,
+    fields_seen: *[@typeInfo(T).@"struct".field_names.len]bool,
     parser: *Parser,
 ) !void {
     while (parser.line_ptr) |raw_line| {
@@ -440,22 +440,22 @@ fn stripTrailingCr(line: []const u8) []const u8 {
 fn parseKvLineWithString(
     comptime T: type,
     result: *T,
-    fields_seen: *[std.meta.fields(T).len]bool,
+    fields_seen: *[@typeInfo(T).@"struct".field_names.len]bool,
     key: []const u8,
     value: []const u8,
 ) !void {
     const struct_info = @typeInfo(T).@"struct";
-    inline for (struct_info.fields, 0..) |field, index| {
-        if (common.matchesInputKey(.toml, T, field.name, key)) {
-            const config = common.deserializeConfig(.toml, T, field.name);
+    inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+        if (common.matchesInputKey(.toml, T, field_name, key)) {
+            const config = common.deserializeConfig(.toml, T, field_name);
             if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
 
-            const field_type_info = @typeInfo(field.type);
+            const field_type_info = @typeInfo(field_type);
             if (field_type_info == .pointer) {
                 if (field_type_info.pointer.size == .slice) {
                     if (field_type_info.pointer.child == u8) {
-                        @field(result, field.name) = value;
+                        @field(result, field_name) = value;
                         fields_seen[index] = true;
                         return;
                     }
@@ -465,7 +465,7 @@ fn parseKvLineWithString(
                 if (child_type_info == .pointer) {
                     if (child_type_info.pointer.size == .slice) {
                         if (child_type_info.pointer.child == u8) {
-                            @field(result, field.name) = value;
+                            @field(result, field_name) = value;
                             fields_seen[index] = true;
                             return;
                         }
@@ -500,15 +500,15 @@ fn parseHeaderName(line: []const u8, bracket_count: usize) ![]const u8 {
 fn dispatchTable(
     comptime T: type,
     result: *T,
-    fields_seen: *[std.meta.fields(T).len]bool,
+    fields_seen: *[@typeInfo(T).@"struct".field_names.len]bool,
     parser: *Parser,
     table_name: []const u8,
 ) !bool {
     const struct_info = @typeInfo(T).@"struct";
 
-    inline for (struct_info.fields, 0..) |field, index| {
-        if (common.matchesInputKey(.toml, T, field.name, table_name)) {
-            const config = common.deserializeConfig(.toml, T, field.name);
+    inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+        if (common.matchesInputKey(.toml, T, field_name, table_name)) {
+            const config = common.deserializeConfig(.toml, T, field_name);
             if (config.skip) {
                 parser.next();
                 skipSection(parser);
@@ -516,11 +516,11 @@ fn dispatchTable(
             }
             if (fields_seen[index]) return error.DuplicateField;
 
-            const field_type_info = @typeInfo(field.type);
+            const field_type_info = @typeInfo(field_type);
             if (field_type_info == .@"struct") {
                 parser.next();
-                const parsed = try parseStructFull(field.type, parser, .nested);
-                @field(result, field.name) = parsed;
+                const parsed = try parseStructFull(field_type, parser, .nested);
+                @field(result, field_name) = parsed;
                 fields_seen[index] = true;
                 return true;
             }
@@ -529,7 +529,7 @@ fn dispatchTable(
                     parser.next();
                     const Child = field_type_info.optional.child;
                     const parsed = try parseStructFull(Child, parser, .nested);
-                    @field(result, field.name) = parsed;
+                    @field(result, field_name) = parsed;
                     fields_seen[index] = true;
                     return true;
                 }
@@ -542,15 +542,15 @@ fn dispatchTable(
 fn dispatchTableArray(
     comptime T: type,
     result: *T,
-    fields_seen: *[std.meta.fields(T).len]bool,
+    fields_seen: *[@typeInfo(T).@"struct".field_names.len]bool,
     parser: *Parser,
     array_name: []const u8,
 ) !bool {
     const struct_info = @typeInfo(T).@"struct";
 
-    inline for (struct_info.fields, 0..) |field, index| {
-        if (common.matchesInputKey(.toml, T, field.name, array_name)) {
-            const config = common.deserializeConfig(.toml, T, field.name);
+    inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+        if (common.matchesInputKey(.toml, T, field_name, array_name)) {
+            const config = common.deserializeConfig(.toml, T, field_name);
             if (config.skip) {
                 parser.next();
                 skipSection(parser);
@@ -558,13 +558,13 @@ fn dispatchTableArray(
             }
             if (fields_seen[index]) return error.DuplicateField;
 
-            const field_type_info = @typeInfo(field.type);
+            const field_type_info = @typeInfo(field_type);
             if (field_type_info == .pointer) {
                 if (field_type_info.pointer.size == .slice) {
                     const child_type_info = @typeInfo(field_type_info.pointer.child);
                     if (child_type_info == .@"struct") {
                         parser.next();
-                        @field(result, field.name) = try parseTableArray(
+                        @field(result, field_name) = try parseTableArray(
                             field_type_info.pointer.child,
                             parser,
                             array_name,
@@ -631,40 +631,40 @@ fn skipSection(parser: *Parser) void {
 fn parseKvLine(
     comptime T: type,
     result: *T,
-    fields_seen: *[std.meta.fields(T).len]bool,
+    fields_seen: *[@typeInfo(T).@"struct".field_names.len]bool,
     allocator: std.mem.Allocator,
     key: []const u8,
     raw_value: []const u8,
 ) !void {
     const struct_info = @typeInfo(T).@"struct";
-    inline for (struct_info.fields, 0..) |field, index| {
-        if (common.matchesInputKey(.toml, T, field.name, key)) {
-            const config = common.deserializeConfig(.toml, T, field.name);
+    inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+        if (common.matchesInputKey(.toml, T, field_name, key)) {
+            const config = common.deserializeConfig(.toml, T, field_name);
             if (config.skip) return;
             if (fields_seen[index]) return error.DuplicateField;
 
             // Use a comptime switch to avoid instantiating parseTomlValue for struct types.
-            switch (@typeInfo(field.type)) {
+            switch (@typeInfo(field_type)) {
                 .@"struct" => {},
                 .optional => |optional_type_info| {
                     if (@typeInfo(optional_type_info.child) == .@"struct") {
                         // Optional structs are handled by dispatchTable for [table] sections.
                     } else {
-                        const parsed = try parseTomlValue(field.type, allocator, raw_value);
-                        @field(result, field.name) = parsed;
+                        const parsed = try parseTomlValue(field_type, allocator, raw_value);
+                        @field(result, field_name) = parsed;
                         fields_seen[index] = true;
                     }
                 },
                 .pointer => |pointer_type_info| {
                     if (pointer_type_info.size == .slice) {
-                        const parsed = try parseTomlValue(field.type, allocator, raw_value);
-                        @field(result, field.name) = parsed;
+                        const parsed = try parseTomlValue(field_type, allocator, raw_value);
+                        @field(result, field_name) = parsed;
                         fields_seen[index] = true;
                     }
                 },
                 else => {
-                    const parsed = try parseTomlValue(field.type, allocator, raw_value);
-                    @field(result, field.name) = parsed;
+                    const parsed = try parseTomlValue(field_type, allocator, raw_value);
+                    @field(result, field_name) = parsed;
                     fields_seen[index] = true;
                 },
             }
@@ -720,9 +720,9 @@ fn parseTomlValue(
         },
         .@"enum" => |enum_type_info| {
             const string = try scanString(allocator, raw_value);
-            inline for (enum_type_info.fields) |field| {
-                if (std.mem.eql(u8, field.name, string)) {
-                    return @enumFromInt(field.value);
+            inline for (enum_type_info.field_names, enum_type_info.field_values) |field_name, field_val| {
+                if (std.mem.eql(u8, field_name, string)) {
+                    return @fromBackingInt(@intCast(field_val));
                 }
             }
             return error.UnexpectedToken;

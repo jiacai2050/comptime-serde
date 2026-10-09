@@ -1,12 +1,12 @@
 .{
     .name = .comptime_serde,
     .fingerprint = 0xf93787381fe72637,
-    .version = "0.2.0",
-    .minimum_zig_version = "0.16.0",
+    .version = "0.3.0-dev",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zigcli = .{
-            .url = "git+https://github.com/jiacai2050/zigcli.git?ref=v0.6.2#35e013d209b18d0e9c1df85e7e2044e15bde22ad",
-            .hash = "zigcli-0.6.2-ORC7jMFFBgDegrwcsueXsOekZh-HHlKHLJQuostneMpS",
+            .url = "git+https://github.com/jiacai2050/zigcli.git#ae972e756c378310b1e737621998d0e7041b7e6e",
+            .hash = "zigcli-0.7.0-dev-ORC7jOvVBQBKOkgEcd64Fzyk1kfN5blJjwBaEAQtyuU0",
             .lazy = true,
         },
     },

@@ -1,6 +1,6 @@
 # Introduction
 
-![](https://img.shields.io/badge/zig%20version-0.16.0-F7A41D.svg)
+![](https://img.shields.io/badge/zig%20version-0.17.0-F7A41D.svg)
 [![](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml/badge.svg)](https://github.com/jiacai2050/comptime-serde/actions/workflows/ci.yml)
 
 > **comptime-serde** is a compile-time serialization/deserialization library for Zig.
@@ -25,7 +25,7 @@ Auto-generated API docs for every public type and function are available at [api
 
 ## Requirements
 
-- Zig 0.16.0 or later
+- Zig 0.17.0 or later
 
 ## Quick Example
 

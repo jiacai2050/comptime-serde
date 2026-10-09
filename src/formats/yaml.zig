@@ -46,16 +46,16 @@ fn writeValue(writer: *std.Io.Writer, value: anytype, indent: usize) !void {
     switch (type_info) {
         .@"struct" => |struct_info| {
             var wrote_any = false;
-            inline for (struct_info.fields) |field| {
-                const field_value = @field(value, field.name);
-                if (common.shouldIncludeField(.yaml, T, field.name, field_value)) {
+            inline for (struct_info.field_names) |field_name| {
+                const field_value = @field(value, field_name);
+                if (common.shouldIncludeField(.yaml, T, field_name, field_value)) {
                     if (wrote_any) {
                         try writeIndent(writer, indent);
                     } else if (indent > 0) {
                         try writeIndent(writer, indent);
                     }
                     wrote_any = true;
-                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field.name)});
+                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field_name)});
                     try writeFieldValue(writer, field_value, indent);
                 }
             }
@@ -170,14 +170,14 @@ fn writeSequenceItem(writer: *std.Io.Writer, value: anytype, indent: usize) !voi
         .@"struct" => |struct_info| {
             // First field on same line as "- ", rest indented.
             var wrote_any = false;
-            inline for (struct_info.fields) |field| {
-                const field_value = @field(value, field.name);
-                if (common.shouldIncludeField(.yaml, T, field.name, field_value)) {
+            inline for (struct_info.field_names) |field_name| {
+                const field_value = @field(value, field_name);
+                if (common.shouldIncludeField(.yaml, T, field_name, field_value)) {
                     if (wrote_any) {
                         try writeIndent(writer, indent + 2);
                     }
                     wrote_any = true;
-                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field.name)});
+                    try writer.print("{s}:", .{common.serializedFieldName(.yaml, T, field_name)});
                     try writeFieldValue(writer, field_value, indent + 2);
                 }
             }
@@ -353,7 +353,7 @@ fn parseValue(
     switch (type_info) {
         .@"struct" => |struct_info| {
             var result: T = undefined;
-            var fields_seen = [_]bool{false} ** struct_info.fields.len;
+            var fields_seen: [struct_info.field_names.len]bool = @splat(false);
 
             while (position.* < all_lines.len) {
                 const line = all_lines[position.*];
@@ -388,9 +388,9 @@ fn parseValue(
                 const key = trimmed[0..colon_pos];
                 const after_colon = std.mem.trimStart(u8, trimmed[colon_pos + 1 ..], " ");
 
-                inline for (struct_info.fields, 0..) |field, index| {
-                    if (common.matchesInputKey(.yaml, T, field.name, key)) {
-                        const config = common.deserializeConfig(.yaml, T, field.name);
+                inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+                    if (common.matchesInputKey(.yaml, T, field_name, key)) {
+                        const config = common.deserializeConfig(.yaml, T, field_name);
                         if (config.skip) {
                             position.* += 1;
                             skipNestedBlock(all_lines, position, line_indent);
@@ -399,14 +399,14 @@ fn parseValue(
                         if (fields_seen[index]) return error.DuplicateField;
                         position.* += 1;
                         const parsed = try parseFieldValue(
-                            field.type,
+                            field_type,
                             allocator,
                             all_lines,
                             position,
                             line_indent,
                             after_colon,
                         );
-                        @field(result, field.name) = parsed;
+                        @field(result, field_name) = parsed;
                         fields_seen[index] = true;
                         break;
                     }
@@ -529,9 +529,9 @@ fn parseFieldValue(
             return error.UnexpectedToken;
         },
         .@"enum" => |enum_info| {
-            inline for (enum_info.fields) |field| {
-                if (std.mem.eql(u8, field.name, inline_value)) {
-                    return @enumFromInt(field.value);
+            inline for (enum_info.field_names, enum_info.field_values) |field_name, field_val| {
+                if (std.mem.eql(u8, field_name, inline_value)) {
+                    return @fromBackingInt(@intCast(field_val));
                 }
             }
             return error.UnexpectedToken;
@@ -698,9 +698,9 @@ fn parseSequenceItem(
             @compileError("unsupported pointer in sequence: " ++ @typeName(T));
         },
         .@"enum" => |enum_info| {
-            inline for (enum_info.fields) |field| {
-                if (std.mem.eql(u8, field.name, item_content)) {
-                    return @enumFromInt(field.value);
+            inline for (enum_info.field_names, enum_info.field_values) |field_name, field_val| {
+                if (std.mem.eql(u8, field_name, item_content)) {
+                    return @fromBackingInt(@intCast(field_val));
                 }
             }
             return error.UnexpectedToken;
@@ -709,30 +709,30 @@ fn parseSequenceItem(
             // Inline struct: "- key: value\n  key: value\n..."
             // Parse first key-value from item_content, then continue with indented lines.
             var result: T = undefined;
-            var fields_seen = [_]bool{false} ** struct_info.fields.len;
+            var fields_seen: [struct_info.field_names.len]bool = @splat(false);
 
             // Parse first KV pair from item_content.
             const colon_pos = findKeyColon(item_content) orelse return error.UnexpectedToken;
             const key = item_content[0..colon_pos];
             const after_colon = std.mem.trimStart(u8, item_content[colon_pos + 1 ..], " ");
 
-            inline for (struct_info.fields, 0..) |field, index| {
-                if (common.matchesInputKey(.yaml, T, field.name, key)) {
-                    const config = common.deserializeConfig(.yaml, T, field.name);
+            inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+                if (common.matchesInputKey(.yaml, T, field_name, key)) {
+                    const config = common.deserializeConfig(.yaml, T, field_name);
                     if (config.skip) {
                         skipNestedBlock(all_lines, position, item_indent + 2);
                         break;
                     }
                     if (fields_seen[index]) return error.DuplicateField;
                     const parsed = try parseFieldValue(
-                        field.type,
+                        field_type,
                         allocator,
                         all_lines,
                         position,
                         item_indent + 2,
                         after_colon,
                     );
-                    @field(result, field.name) = parsed;
+                    @field(result, field_name) = parsed;
                     fields_seen[index] = true;
                     break;
                 }
@@ -773,23 +773,23 @@ fn parseSequenceItem(
 
                 position.* += 1;
 
-                inline for (struct_info.fields, 0..) |field, index| {
-                    if (common.matchesInputKey(.yaml, T, field.name, kv_key)) {
-                        const config = common.deserializeConfig(.yaml, T, field.name);
+                inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
+                    if (common.matchesInputKey(.yaml, T, field_name, kv_key)) {
+                        const config = common.deserializeConfig(.yaml, T, field_name);
                         if (config.skip) {
                             skipNestedBlock(all_lines, position, line_indent);
                             break;
                         }
                         if (fields_seen[index]) return error.DuplicateField;
                         const parsed = try parseFieldValue(
-                            field.type,
+                            field_type,
                             allocator,
                             all_lines,
                             position,
                             line_indent,
                             kv_val,
                         );
-                        @field(result, field.name) = parsed;
+                        @field(result, field_name) = parsed;
                         fields_seen[index] = true;
                         break;
                     }

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 comptime-serde — a compile-time serialization/deserialization library for Zig. All type dispatch happens at comptime via `@typeInfo`, zero runtime overhead.
 
-Requires **Zig 0.16.0**.
+Requires **Zig 0.17.0**.
 
 ## Commands
 

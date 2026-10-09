@@ -29,7 +29,7 @@ jobs:
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
       - name: Set version
         run: |
@@ -41,7 +41,7 @@ jobs:
       - name: Build
         run: |
           GIT_COMMIT=$(git rev-parse --short HEAD)
-          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${RELEASE_VERSION} -Dgit_commit=${GIT_COMMIT}
+          zig build -Dbuild-cli -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${RELEASE_VERSION} -Dgit_commit=${GIT_COMMIT}
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             zip serde-gen-${RELEASE_VERSION}-${{ matrix.target }}.zip zig-out/bin/serde-gen.exe
           else
